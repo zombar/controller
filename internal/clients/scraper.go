@@ -22,9 +22,9 @@ type ScraperRequest struct {
 
 // ScraperResponse represents a response from the scraper service
 type ScraperResponse struct {
-	UUID     string                 `json:"uuid"`
+	UUID     string                 `json:"id"`
 	URL      string                 `json:"url"`
-	MainText string                 `json:"main_text"`
+	MainText string                 `json:"content"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -47,7 +47,7 @@ func (c *ScraperClient) Scrape(url string) (*ScraperResponse, error) {
 	}
 
 	resp, err := c.httpClient.Post(
-		fmt.Sprintf("%s/scrape", c.baseURL),
+		fmt.Sprintf("%s/api/scrape", c.baseURL),
 		"application/json",
 		bytes.NewBuffer(jsonData),
 	)

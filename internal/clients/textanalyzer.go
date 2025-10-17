@@ -32,7 +32,7 @@ func NewTextAnalyzerClient(baseURL string) *TextAnalyzerClient {
 	return &TextAnalyzerClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 10 * time.Minute, // AI analysis can take several minutes
 		},
 	}
 }
@@ -46,7 +46,7 @@ func (c *TextAnalyzerClient) Analyze(text string) (*TextAnalyzerResponse, error)
 	}
 
 	resp, err := c.httpClient.Post(
-		fmt.Sprintf("%s/analyze", c.baseURL),
+		fmt.Sprintf("%s/api/analyze", c.baseURL),
 		"application/json",
 		bytes.NewBuffer(jsonData),
 	)
