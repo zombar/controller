@@ -16,7 +16,7 @@ import (
 // mockScraperServer creates a mock scraper HTTP server
 func mockScraperServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/scrape" {
+		if r.URL.Path != "/api/scrape" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
@@ -38,7 +38,7 @@ func mockScraperServer() *httptest.Server {
 // mockTextAnalyzerServer creates a mock text analyzer HTTP server
 func mockTextAnalyzerServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/analyze" {
+		if r.URL.Path != "/api/analyze" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
