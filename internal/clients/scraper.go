@@ -22,10 +22,10 @@ type ScraperRequest struct {
 
 // ScraperResponse represents a response from the scraper service
 type ScraperResponse struct {
-	UUID      string `json:"uuid"`
-	URL       string `json:"url"`
-	MainText  string `json:"main_text"`
-	Metadata  map[string]interface{} `json:"metadata,omitempty"`
+	UUID     string                 `json:"uuid"`
+	URL      string                 `json:"url"`
+	MainText string                 `json:"main_text"`
+	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // NewScraperClient creates a new scraper client

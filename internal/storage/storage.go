@@ -18,14 +18,14 @@ type Storage struct {
 
 // Request represents a controller request record
 type Request struct {
-	ID                 string                 `json:"id"`
-	CreatedAt          time.Time              `json:"created_at"`
-	SourceType         string                 `json:"source_type"` // "url" or "text"
-	SourceURL          *string                `json:"source_url,omitempty"`
-	ScraperUUID        *string                `json:"scraper_uuid,omitempty"`
-	TextAnalyzerUUID   string                 `json:"textanalyzer_uuid"`
-	Tags               []string               `json:"tags"`
-	Metadata           map[string]interface{} `json:"metadata,omitempty"`
+	ID               string                 `json:"id"`
+	CreatedAt        time.Time              `json:"created_at"`
+	SourceType       string                 `json:"source_type"` // "url" or "text"
+	SourceURL        *string                `json:"source_url,omitempty"`
+	ScraperUUID      *string                `json:"scraper_uuid,omitempty"`
+	TextAnalyzerUUID string                 `json:"textanalyzer_uuid"`
+	Tags             []string               `json:"tags"`
+	Metadata         map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // New creates a new Storage instance and runs migrations
