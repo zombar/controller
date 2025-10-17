@@ -19,7 +19,7 @@ func Load() (*Config, error) {
 	config := &Config{
 		ScraperBaseURL:      getEnv("SCRAPER_BASE_URL", "http://localhost:8081"),
 		TextAnalyzerBaseURL: getEnv("TEXTANALYZER_BASE_URL", "http://localhost:8082"),
-		Port:                getEnvAsInt("CONTROLLER_PORT", 8083),
+		Port:                getEnvAsInt("CONTROLLER_PORT", 8080),
 		DatabasePath:        getEnv("DATABASE_PATH", "./controller.db"),
 	}
 
