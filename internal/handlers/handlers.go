@@ -95,6 +95,21 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 
 	// Create controller request record
 	controllerID := uuid.New().String()
+
+	// Build scraper metadata from the scraper response
+	// Extract the core fields we want to expose
+	scraperMetadata := make(map[string]interface{})
+	scraperMetadata["title"] = scraperResp.Title
+	scraperMetadata["content"] = scraperResp.Content
+	scraperMetadata["url"] = scraperResp.URL
+
+	// Also include fields from the scraper's Metadata (description, keywords, etc.)
+	if scraperResp.Metadata != nil {
+		for k, v := range scraperResp.Metadata {
+			scraperMetadata[k] = v
+		}
+	}
+
 	record := &storage.Request{
 		ID:               controllerID,
 		CreatedAt:        time.Now().UTC(),
@@ -104,7 +119,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		TextAnalyzerUUID: analyzerResp.ID,
 		Tags:             analyzerResp.GetTags(),
 		Metadata: map[string]interface{}{
-			"scraper_metadata":  scraperResp.Metadata,
+			"scraper_metadata":  scraperMetadata,
 			"analyzer_metadata": analyzerResp.Metadata,
 		},
 	}

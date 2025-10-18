@@ -1,18 +1,94 @@
 # Controller Service
 
-A central coordinating service that orchestrates the `scraper` and `textanalyzer` microservices. The controller service manages workflows for URL scraping, text analysis, and provides search capabilities across processed content.
+A central orchestration service that coordinates the scraper and textanalyzer microservices, providing a unified API for URL scraping, text analysis, and content search.
 
 ## Features
 
-- **URL Scraping Workflow**: Send a URL to be scraped, with the main text automatically passed to the text analyzer
-- **Direct Text Analysis**: Send text directly for analysis without scraping
-- **Tag Search**: Search for content by AI-generated tags with fuzzy matching support
-- **Metadata Tracking**: All processing UUIDs and timestamps are stored for audit trails
-- **RESTful API**: Simple HTTP JSON API for all operations
+- Orchestrates scraper and textanalyzer services
+- Unified API for URL scraping with automatic text analysis
+- Direct text analysis without scraping
+- Tag-based search with fuzzy matching support
+- SQLite storage with audit trails
+- UUID tracking for all service calls
+- Designed for PostgreSQL migration
+
+## Requirements
+
+- Go 1.21 or higher
+- Running scraper service
+- Running textanalyzer service
+- SQLite3
+
+## Installation
+
+```bash
+# Navigate to directory
+cd controller
+
+# Install dependencies
+go mod download
+
+# Build the binary
+go build -o controller ./cmd/controller
+
+# Run the service
+./controller
+```
+
+## Usage
+
+### Starting the Service
+
+```bash
+# Default configuration
+./controller
+
+# Using environment variables
+export SCRAPER_BASE_URL=http://localhost:8081
+export TEXTANALYZER_BASE_URL=http://localhost:8082
+export CONTROLLER_PORT=8080
+export DATABASE_PATH=./controller.db
+./controller
+```
+
+### Environment Variables
+
+- `SCRAPER_BASE_URL` - Scraper service URL (default: http://localhost:8081)
+- `TEXTANALYZER_BASE_URL` - TextAnalyzer service URL (default: http://localhost:8082)
+- `CONTROLLER_PORT` - HTTP server port (default: 8080)
+- `DATABASE_PATH` - SQLite database path (default: ./controller.db)
+
+## Quick Examples
+
+```bash
+# Health check
+curl http://localhost:8080/health
+
+# Scrape URL and analyze
+curl -X POST http://localhost:8080/scrape \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article"}'
+
+# Analyze text directly
+curl -X POST http://localhost:8080/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Your text to analyze..."}'
+
+# Search by tags
+curl -X POST http://localhost:8080/search/tags \
+  -H "Content-Type: application/json" \
+  -d '{"tags": ["programming", "web"], "fuzzy": false}'
+
+# Get request by ID
+curl http://localhost:8080/requests/550e8400-e29b-41d4-a716-446655440000
+
+# List all requests
+curl "http://localhost:8080/requests?limit=10&offset=0"
+```
 
 ## Architecture
 
-The controller service acts as an orchestrator:
+The controller acts as an orchestrator for the scraper and textanalyzer services:
 
 ```
 ┌──────────┐
@@ -29,92 +105,24 @@ The controller service acts as an orchestrator:
                     └──────────────┘
 ```
 
-### Technology Stack
+### Workflow
 
-- **Language**: Go 1.21+
-- **Database**: SQLite (with PostgreSQL migration path)
-- **Dependencies**:
-  - `github.com/mattn/go-sqlite3` - SQLite driver
-  - `github.com/google/uuid` - UUID generation
+**URL Scraping Flow:**
+1. Client sends URL to controller
+2. Controller calls scraper service
+3. Scraper returns extracted content
+4. Controller sends content to textanalyzer
+5. Controller stores all UUIDs and tags
+6. Controller returns combined result
 
-## Installation
+**Direct Analysis Flow:**
+1. Client sends text to controller
+2. Controller calls textanalyzer service
+3. Controller stores UUID and tags
+4. Controller returns analysis result
 
-### Prerequisites
+## Output Format
 
-- Go 1.21 or higher
-- SQLite3
-- Running instances of `scraper` and `textanalyzer` services
-
-### Build
-
-```bash
-# Install dependencies
-go mod download
-
-# Build the binary
-go build -o controller ./cmd/controller
-
-# Or run directly
-go run ./cmd/controller/main.go
-```
-
-## Configuration
-
-Configuration is managed through environment variables. Copy `.env.example` to `.env` and adjust as needed:
-
-```bash
-cp .env.example .env
-```
-
-### Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SCRAPER_BASE_URL` | `http://localhost:8081` | Base URL for the scraper service |
-| `TEXTANALYZER_BASE_URL` | `http://localhost:8082` | Base URL for the text analyzer service |
-| `CONTROLLER_PORT` | `8080` | Port for the controller service to listen on |
-| `DATABASE_PATH` | `./controller.db` | Path to SQLite database file |
-
-## API Documentation
-
-### Base URL
-
-All endpoints are relative to `http://localhost:8080` (or your configured port).
-
-### Endpoints
-
-#### 1. Health Check
-
-Check if the service is running.
-
-**Request:**
-```bash
-curl -X GET http://localhost:8080/health
-```
-
-**Response:**
-```json
-{
-  "status": "healthy"
-}
-```
-
----
-
-#### 2. Scrape URL and Analyze
-
-Scrape a URL and automatically analyze the extracted text.
-
-**Request:**
-```bash
-curl -X POST http://localhost:8080/scrape \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://example.com/article"
-  }'
-```
-
-**Response:**
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -129,253 +137,56 @@ curl -X POST http://localhost:8080/scrape \
       "title": "Example Article"
     },
     "analyzer_metadata": {
-      "language": "en"
+      "sentiment": "positive"
     }
   }
 }
 ```
 
----
+**Fields:**
+- `id` - Unique controller request ID
+- `created_at` - Request timestamp
+- `source_type` - Either "url" or "text"
+- `source_url` - Original URL (if source_type is "url")
+- `scraper_uuid` - UUID from scraper service
+- `textanalyzer_uuid` - UUID from textanalyzer service
+- `tags` - AI-generated tags from textanalyzer
+- `metadata` - Combined metadata from both services
 
-#### 3. Analyze Text Directly
+## Development
 
-Send text directly for analysis without scraping.
+### Make Commands
 
-**Request:**
 ```bash
-curl -X POST http://localhost:8080/analyze \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "This is some text that needs to be analyzed for AI tagging."
-  }'
+make build          # Build binary
+make test           # Run tests
+make test-coverage  # Generate coverage
+make run            # Start server
+make dev            # Development mode
+make clean          # Clean artifacts
+make fmt            # Format code
+make lint           # Run linter
 ```
 
-**Response:**
-```json
-{
-  "id": "660e8400-e29b-41d4-a716-446655440001",
-  "created_at": "2025-10-17T12:35:10.123Z",
-  "source_type": "text",
-  "textanalyzer_uuid": "ghi789-analyzer-uuid",
-  "tags": ["analysis", "ai", "tagging"],
-  "metadata": {
-    "analyzer_metadata": {
-      "language": "en",
-      "confidence": 0.95
-    }
-  }
-}
-```
-
----
-
-#### 4. Search by Tags
-
-Search for requests by tags with optional fuzzy matching.
-
-**Request (Exact Match):**
-```bash
-curl -X POST http://localhost:8080/search/tags \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tags": ["programming", "web"],
-    "fuzzy": false
-  }'
-```
-
-**Request (Fuzzy Match):**
-```bash
-curl -X POST http://localhost:8080/search/tags \
-  -H "Content-Type: application/json" \
-  -d '{
-    "tags": ["prog"],
-    "fuzzy": true
-  }'
-```
-
-**Response:**
-```json
-{
-  "request_ids": [
-    "550e8400-e29b-41d4-a716-446655440000",
-    "660e8400-e29b-41d4-a716-446655440001"
-  ],
-  "count": 2
-}
-```
-
----
-
-#### 5. Get Request by ID
-
-Retrieve detailed information about a specific request.
-
-**Request:**
-```bash
-curl -X GET http://localhost:8080/requests/550e8400-e29b-41d4-a716-446655440000
-```
-
-**Response:**
-```json
-{
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "created_at": "2025-10-17T12:34:56.789Z",
-  "source_type": "url",
-  "source_url": "https://example.com/article",
-  "scraper_uuid": "abc123-scraper-uuid",
-  "textanalyzer_uuid": "def456-analyzer-uuid",
-  "tags": ["technology", "programming", "web"],
-  "metadata": {
-    "scraper_metadata": {
-      "title": "Example Article"
-    },
-    "analyzer_metadata": {
-      "language": "en"
-    }
-  }
-}
-```
-
----
-
-#### 6. List All Requests
-
-List all requests with pagination support.
-
-**Request:**
-```bash
-# Default pagination (50 items, offset 0)
-curl -X GET http://localhost:8080/requests
-
-# Custom pagination
-curl -X GET "http://localhost:8080/requests?limit=10&offset=20"
-```
-
-**Response:**
-```json
-{
-  "requests": [
-    {
-      "id": "660e8400-e29b-41d4-a716-446655440001",
-      "created_at": "2025-10-17T12:35:10.123Z",
-      "source_type": "text",
-      "textanalyzer_uuid": "ghi789-analyzer-uuid",
-      "tags": ["analysis", "ai"],
-      "metadata": {}
-    },
-    {
-      "id": "550e8400-e29b-41d4-a716-446655440000",
-      "created_at": "2025-10-17T12:34:56.789Z",
-      "source_type": "url",
-      "source_url": "https://example.com/article",
-      "scraper_uuid": "abc123-scraper-uuid",
-      "textanalyzer_uuid": "def456-analyzer-uuid",
-      "tags": ["technology", "programming"],
-      "metadata": {}
-    }
-  ],
-  "count": 2,
-  "limit": 50,
-  "offset": 0
-}
-```
-
----
-
-### Error Responses
-
-All endpoints return errors in the following format:
-
-```json
-{
-  "error": "Error message describing what went wrong"
-}
-```
-
-Common HTTP status codes:
-- `400 Bad Request` - Invalid input data
-- `404 Not Found` - Resource not found
-- `405 Method Not Allowed` - Wrong HTTP method
-- `500 Internal Server Error` - Server-side error
-
-## Database Schema
-
-The service uses SQLite with a migration system for easy schema evolution.
-
-### Tables
-
-#### `requests`
-Stores all controller request records.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | TEXT | Primary key (UUID) |
-| `created_at` | TIMESTAMP | When the request was created |
-| `source_type` | TEXT | Either "url" or "text" |
-| `source_url` | TEXT | Original URL (if source_type is "url") |
-| `scraper_uuid` | TEXT | UUID from scraper service |
-| `textanalyzer_uuid` | TEXT | UUID from text analyzer service |
-| `tags_json` | TEXT | JSON array of tags |
-| `metadata_json` | TEXT | JSON object with additional metadata |
-
-#### `tags`
-Individual tags for efficient searching.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | INTEGER | Auto-increment primary key |
-| `request_id` | TEXT | Foreign key to requests.id |
-| `tag` | TEXT | Individual tag value |
-
-### Migrations
-
-The database schema is managed through a migration system located in `internal/storage/migrations.go`. To add a new migration:
-
-1. Add a new `Migration` struct to the `migrations` slice
-2. Increment the version number
-3. Provide descriptive name and SQL
-4. Restart the application (migrations run automatically on startup)
-
-Example:
-```go
-{
-    Version: 3,
-    Name:    "add_user_column",
-    SQL: `ALTER TABLE requests ADD COLUMN user_id TEXT;`,
-}
-```
-
-## Testing
-
-### Run Tests
+### Running Tests
 
 ```bash
 # Run all tests
-go test ./...
+make test
 
-# Run tests with coverage
+# Run with coverage
+make test-coverage
+
+# Using Go directly
+go test ./...
+go test -v ./...
 go test -cover ./...
 
-# Run tests with verbose output
-go test -v ./...
-
-# Run specific package tests
+# Test specific packages
 go test ./internal/storage
 go test ./internal/handlers
-go test ./internal/config
+go test ./internal/clients
 ```
-
-### Test Coverage
-
-The test suite covers:
-- ✅ Configuration loading and validation
-- ✅ Database operations (CRUD)
-- ✅ Tag searching (exact and fuzzy)
-- ✅ HTTP handlers with mock services
-- ✅ Error handling and edge cases
-- ✅ Pagination
-
-## Development
 
 ### Project Structure
 
@@ -387,7 +198,7 @@ controller/
 ├── internal/
 │   ├── clients/
 │   │   ├── scraper.go          # Scraper service client
-│   │   └── textanalyzer.go     # Text analyzer client
+│   │   └── textanalyzer.go     # TextAnalyzer client
 │   ├── config/
 │   │   ├── config.go           # Configuration management
 │   │   └── config_test.go      # Config tests
@@ -398,91 +209,80 @@ controller/
 │       ├── migrations.go       # Database migrations
 │       ├── storage.go          # Database operations
 │       └── storage_test.go     # Storage tests
-├── .env.example                # Example environment config
-├── .gitignore
-├── go.mod
-├── go.sum
-└── README.md
+├── .env.example                # Example configuration
+├── README.md                   # This file
+└── API.md                      # API reference
 ```
 
-### Adding New Features
+## Database
 
-1. **New Endpoint**: Add handler in `internal/handlers/handlers.go` and register route in `cmd/controller/main.go`
-2. **New Client Method**: Extend `internal/clients/*.go` with new API calls
-3. **Database Changes**: Add migration in `internal/storage/migrations.go`
-4. **Tests**: Add corresponding tests in `*_test.go` files
+### Schema
 
-## Deployment
+**requests table:**
+- `id` - UUID primary key
+- `created_at` - Timestamp
+- `source_type` - "url" or "text"
+- `source_url` - Original URL (nullable)
+- `scraper_uuid` - Scraper service UUID (nullable)
+- `textanalyzer_uuid` - TextAnalyzer UUID
+- `tags_json` - JSON array of tags
+- `metadata_json` - JSON metadata object
 
-### Docker Example
+**tags table:**
+- `id` - Auto-increment primary key
+- `request_id` - Foreign key to requests.id
+- `tag` - Individual tag value
 
-```dockerfile
-FROM golang:1.21-alpine AS builder
-WORKDIR /app
-COPY . .
-RUN go mod download
-RUN go build -o controller ./cmd/controller
+### Migrations
 
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates sqlite
-WORKDIR /root/
-COPY --from=builder /app/controller .
-EXPOSE 8080
-CMD ["./controller"]
-```
+The database schema is managed through a migration system in `internal/storage/migrations.go`.
 
-Build and run:
-```bash
-docker build -t controller:latest .
-docker run -p 8080:8080 \
-  -e SCRAPER_BASE_URL=http://scraper:8081 \
-  -e TEXTANALYZER_BASE_URL=http://analyzer:8082 \
-  controller:latest
-```
+To add a new migration:
+1. Add a new Migration struct to the migrations slice
+2. Increment the version number
+3. Provide SQL statement
+4. Restart the service
 
-### Production Considerations
+### Switching to PostgreSQL
 
-1. **Database**: For production, migrate to PostgreSQL by:
-   - Updating connection string in `storage.go`
-   - Adjusting SQL queries (most should work as-is)
-   - Testing migrations thoroughly
-
-2. **Logging**: Add structured logging (e.g., `log/slog` from stdlib)
-
-3. **Metrics**: Add Prometheus metrics for monitoring
-
-4. **Service Discovery**: Use environment variables or consul for service URLs
-
-5. **Security**: Add authentication/authorization middleware
-
-## Migration to PostgreSQL
-
-The codebase is designed for easy migration to PostgreSQL:
+To use PostgreSQL instead of SQLite:
 
 1. Update `internal/storage/storage.go`:
-```go
-import _ "github.com/lib/pq"  // Instead of sqlite3
+   ```go
+   import _ "github.com/lib/pq"
 
-func New(connectionString string) (*Storage, error) {
-    db, err := sql.Open("postgres", connectionString)
-    // ... rest remains the same
-}
-```
+   func New(connectionString string) (*Storage, error) {
+       db, err := sql.Open("postgres", connectionString)
+       // ... rest remains the same
+   }
+   ```
 
-2. Update connection string format in configuration:
-```
-DATABASE_URL=postgres://user:pass@localhost:5432/controller?sslmode=disable
-```
+2. Update migrations:
+   - `AUTOINCREMENT` → `SERIAL`
+   - `DATETIME` → `TIMESTAMP`
 
-3. Test migrations - most SQL should be compatible, but check:
-   - `AUTOINCREMENT` → `SERIAL` or `IDENTITY`
-   - JSON storage (PostgreSQL has native JSON types)
-   - Foreign key syntax
+3. Use PostgreSQL connection string:
+   ```bash
+   export DATABASE_PATH="postgres://user:pass@localhost:5432/controller?sslmode=disable"
+   ./controller
+   ```
+
+## Performance Considerations
+
+- HTTP client timeouts configured for service dependencies
+- Database connection pooling for concurrent requests
+- Tag search uses indexed queries
+- Fuzzy tag matching uses LIKE queries
+
+## API Documentation
+
+See [API.md](API.md) for complete API reference including:
+- Endpoint specifications
+- Request/response formats
+- Error handling
+- Code examples
+- Integration patterns
 
 ## License
 
-MIT
-
-## Support
-
-For issues, questions, or contributions, please open an issue in the repository.
+This project is licensed under the MIT License - see the [LICENSE](../../LICENSE) file for details.
