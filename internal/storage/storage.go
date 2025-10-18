@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 // Storage handles all database operations
@@ -31,7 +31,7 @@ type Request struct {
 // New creates a new Storage instance and runs migrations
 func New(databasePath string) (*Storage, error) {
 	log.Printf("Opening database at: %s", databasePath)
-	db, err := sql.Open("sqlite3", databasePath)
+	db, err := sql.Open("sqlite", databasePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
