@@ -24,6 +24,7 @@ type ScraperRequest struct {
 type ScraperResponse struct {
 	ID       string                 `json:"id"`
 	URL      string                 `json:"url"`
+	Title    string                 `json:"title"`
 	Content  string                 `json:"content"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
@@ -33,7 +34,7 @@ func NewScraperClient(baseURL string) *ScraperClient {
 	return &ScraperClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: 10 * time.Minute, // Web scraping can take several minutes
 		},
 	}
 }
