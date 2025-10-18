@@ -17,7 +17,7 @@ help:
 # Build the application
 build:
 	@echo "Building controller..."
-	@CGO_ENABLED=1 go build -o controller ./cmd/controller
+	@go build -o controller ./cmd/controller
 
 # Run tests
 test:
