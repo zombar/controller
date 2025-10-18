@@ -22,9 +22,9 @@ func mockScraperServer() *httptest.Server {
 		}
 
 		response := clients.ScraperResponse{
-			UUID:     "scraper-test-uuid",
-			URL:      "https://example.com",
-			MainText: "This is the main text from the scraped page.",
+			ID:      "scraper-test-uuid",
+			URL:     "https://example.com",
+			Content: "This is the main text from the scraped page.",
 			Metadata: map[string]interface{}{
 				"title": "Example Page",
 			},
@@ -44,10 +44,10 @@ func mockTextAnalyzerServer() *httptest.Server {
 		}
 
 		response := clients.TextAnalyzerResponse{
-			UUID: "analyzer-test-uuid",
-			Tags: []string{"example", "test", "content"},
+			ID: "analyzer-test-uuid",
 			Metadata: map[string]interface{}{
 				"language": "en",
+				"tags":     []interface{}{"example", "test", "content"},
 			},
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -114,7 +114,7 @@ func TestScrapeURL(t *testing.T) {
 	}
 	jsonData, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/scrape", bytes.NewBuffer(jsonData))
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -155,7 +155,7 @@ func TestAnalyzeText(t *testing.T) {
 	}
 	jsonData, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/analyze", bytes.NewBuffer(jsonData))
+	req := httptest.NewRequest(http.MethodPost, "/api/analyze", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -194,7 +194,7 @@ func TestSearchTags(t *testing.T) {
 	// First, create some requests with tags
 	analyzeReq := AnalyzeTextRequest{Text: "Test text"}
 	jsonData, _ := json.Marshal(analyzeReq)
-	req := httptest.NewRequest(http.MethodPost, "/analyze", bytes.NewBuffer(jsonData))
+	req := httptest.NewRequest(http.MethodPost, "/api/analyze", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	handler.AnalyzeText(w, req)
@@ -208,7 +208,7 @@ func TestSearchTags(t *testing.T) {
 	}
 	jsonData, _ = json.Marshal(searchReq)
 
-	req = httptest.NewRequest(http.MethodPost, "/search/tags", bytes.NewBuffer(jsonData))
+	req = httptest.NewRequest(http.MethodPost, "/api/search", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 
@@ -235,7 +235,7 @@ func TestGetRequest(t *testing.T) {
 	// First, create a request
 	analyzeReq := AnalyzeTextRequest{Text: "Test text"}
 	jsonData, _ := json.Marshal(analyzeReq)
-	req := httptest.NewRequest(http.MethodPost, "/analyze", bytes.NewBuffer(jsonData))
+	req := httptest.NewRequest(http.MethodPost, "/api/analyze", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	handler.AnalyzeText(w, req)
@@ -244,7 +244,7 @@ func TestGetRequest(t *testing.T) {
 	json.NewDecoder(w.Body).Decode(&createResponse)
 
 	// Now retrieve the request
-	req = httptest.NewRequest(http.MethodGet, "/requests/"+createResponse.ID, nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/requests/"+createResponse.ID, nil)
 	w = httptest.NewRecorder()
 
 	handler.GetRequest(w, req)
@@ -267,7 +267,7 @@ func TestGetRequestNotFound(t *testing.T) {
 	handler, _, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	req := httptest.NewRequest(http.MethodGet, "/requests/non-existent-id", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/requests/non-existent-id", nil)
 	w := httptest.NewRecorder()
 
 	handler.GetRequest(w, req)
@@ -285,14 +285,14 @@ func TestListRequests(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		analyzeReq := AnalyzeTextRequest{Text: "Test text"}
 		jsonData, _ := json.Marshal(analyzeReq)
-		req := httptest.NewRequest(http.MethodPost, "/analyze", bytes.NewBuffer(jsonData))
+		req := httptest.NewRequest(http.MethodPost, "/api/analyze", bytes.NewBuffer(jsonData))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		handler.AnalyzeText(w, req)
 	}
 
 	// List requests
-	req := httptest.NewRequest(http.MethodGet, "/requests?limit=10&offset=0", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/requests?limit=10&offset=0", nil)
 	w := httptest.NewRecorder()
 
 	handler.ListRequests(w, req)
@@ -320,7 +320,7 @@ func TestScrapeURLInvalidMethod(t *testing.T) {
 	handler, _, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	req := httptest.NewRequest(http.MethodGet, "/scrape", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/scrape", nil)
 	w := httptest.NewRecorder()
 
 	handler.ScrapeURL(w, req)
@@ -337,7 +337,7 @@ func TestScrapeURLEmptyURL(t *testing.T) {
 	reqBody := ScrapeURLRequest{URL: ""}
 	jsonData, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/scrape", bytes.NewBuffer(jsonData))
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -355,7 +355,7 @@ func TestAnalyzeTextEmptyText(t *testing.T) {
 	reqBody := AnalyzeTextRequest{Text: ""}
 	jsonData, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/analyze", bytes.NewBuffer(jsonData))
+	req := httptest.NewRequest(http.MethodPost, "/api/analyze", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 

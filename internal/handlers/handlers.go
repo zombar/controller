@@ -87,7 +87,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call text analyzer service with the main text
-	analyzerResp, err := h.textAnalyzer.Analyze(scraperResp.MainText)
+	analyzerResp, err := h.textAnalyzer.Analyze(scraperResp.Content)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to analyze text: %v", err), http.StatusInternalServerError)
 		return
@@ -100,9 +100,9 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		CreatedAt:        time.Now().UTC(),
 		SourceType:       "url",
 		SourceURL:        &req.URL,
-		ScraperUUID:      &scraperResp.UUID,
-		TextAnalyzerUUID: analyzerResp.UUID,
-		Tags:             analyzerResp.Tags,
+		ScraperUUID:      &scraperResp.ID,
+		TextAnalyzerUUID: analyzerResp.ID,
+		Tags:             analyzerResp.GetTags(),
 		Metadata: map[string]interface{}{
 			"scraper_metadata":  scraperResp.Metadata,
 			"analyzer_metadata": analyzerResp.Metadata,
@@ -160,8 +160,8 @@ func (h *Handler) AnalyzeText(w http.ResponseWriter, r *http.Request) {
 		ID:               controllerID,
 		CreatedAt:        time.Now().UTC(),
 		SourceType:       "text",
-		TextAnalyzerUUID: analyzerResp.UUID,
-		Tags:             analyzerResp.Tags,
+		TextAnalyzerUUID: analyzerResp.ID,
+		Tags:             analyzerResp.GetTags(),
 		Metadata: map[string]interface{}{
 			"analyzer_metadata": analyzerResp.Metadata,
 		},
@@ -225,7 +225,7 @@ func (h *Handler) GetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract ID from URL path
-	id := r.URL.Path[len("/requests/"):]
+	id := r.URL.Path[len("/api/requests/"):]
 	if id == "" {
 		respondError(w, "Request ID is required", http.StatusBadRequest)
 		return
