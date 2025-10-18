@@ -22,9 +22,25 @@ type TextAnalyzerRequest struct {
 
 // TextAnalyzerResponse represents a response from the text analyzer service
 type TextAnalyzerResponse struct {
-	UUID     string                 `json:"uuid"`
-	Tags     []string               `json:"tags"`
-	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	ID       string                 `json:"id"`
+	Metadata map[string]interface{} `json:"metadata"`
+}
+
+// GetTags extracts tags from the metadata
+func (r *TextAnalyzerResponse) GetTags() []string {
+	if r.Metadata == nil {
+		return []string{}
+	}
+	if tags, ok := r.Metadata["tags"].([]interface{}); ok {
+		result := make([]string, 0, len(tags))
+		for _, tag := range tags {
+			if tagStr, ok := tag.(string); ok {
+				result = append(result, tagStr)
+			}
+		}
+		return result
+	}
+	return []string{}
 }
 
 // NewTextAnalyzerClient creates a new text analyzer client

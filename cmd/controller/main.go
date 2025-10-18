@@ -38,11 +38,11 @@ func main() {
 	// Setup routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handler.Health)
-	mux.HandleFunc("/scrape", handler.ScrapeURL)
-	mux.HandleFunc("/analyze", handler.AnalyzeText)
-	mux.HandleFunc("/search", handler.SearchTags)
-	mux.HandleFunc("/requests/", handler.GetRequest)
-	mux.HandleFunc("/requests", handler.ListRequests)
+	mux.HandleFunc("/api/scrape", handler.ScrapeURL)
+	mux.HandleFunc("/api/analyze", handler.AnalyzeText)
+	mux.HandleFunc("/api/search", handler.SearchTags)
+	mux.HandleFunc("/api/requests/", handler.GetRequest)
+	mux.HandleFunc("/api/requests", handler.ListRequests)
 
 	// Setup server
 	addr := fmt.Sprintf(":%d", cfg.Port)

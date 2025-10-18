@@ -22,9 +22,9 @@ type ScraperRequest struct {
 
 // ScraperResponse represents a response from the scraper service
 type ScraperResponse struct {
-	UUID     string                 `json:"id"`
+	ID       string                 `json:"id"`
 	URL      string                 `json:"url"`
-	MainText string                 `json:"content"`
+	Content  string                 `json:"content"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 
