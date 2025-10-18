@@ -30,7 +30,7 @@ GET /health
 
 ### Scrape URL and Analyze
 
-Scrape a URL and automatically analyze the extracted text.
+Scrape a URL and automatically analyze the extracted text. **All URLs are automatically scored for quality before processing.** If the score is below the configured threshold, only scoring metadata is returned (no scraping or analysis is performed).
 
 **Request:**
 ```http
@@ -45,7 +45,7 @@ Content-Type: application/json
 **Parameters:**
 - `url` (string, required) - URL to scrape
 
-**Response:**
+**Response (High-Quality URL - Score ≥ Threshold):**
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -66,10 +66,41 @@ Content-Type: application/json
       "sentiment": "positive",
       "word_count": 500,
       "readability_level": "standard"
+    },
+    "link_score": {
+      "score": 0.85,
+      "reason": "High quality technical article",
+      "categories": ["technical", "education"],
+      "is_recommended": true,
+      "malicious_indicators": []
     }
   }
 }
 ```
+
+**Response (Low-Quality URL - Score < Threshold):**
+```json
+{
+  "id": "660e8400-e29b-41d4-a716-446655440001",
+  "created_at": "2025-10-17T12:35:10.123Z",
+  "source_type": "url",
+  "source_url": "https://facebook.com",
+  "tags": ["social_media"],
+  "metadata": {
+    "link_score": {
+      "score": 0.2,
+      "reason": "Social media platform - not suitable for ingestion",
+      "categories": ["social_media"],
+      "is_recommended": false,
+      "malicious_indicators": []
+    },
+    "below_threshold": true,
+    "threshold": 0.5
+  }
+}
+```
+
+**Note:** When a URL scores below the configured threshold (default: 0.5), the controller skips the expensive scraping and analysis operations and returns only the scoring metadata. This protects the database from irrelevant content while providing transparency about why the URL was rejected.
 
 **Example:**
 ```bash
@@ -122,6 +153,109 @@ curl -X POST http://localhost:8080/analyze \
   -H "Content-Type: application/json" \
   -d '{"text": "This is some text to analyze."}'
 ```
+
+---
+
+### Score Link
+
+Score a URL to determine if it should be ingested. This endpoint evaluates content quality and identifies potentially inappropriate, malicious, or low-value content without performing a full scrape.
+
+**Request:**
+```http
+POST /api/score
+Content-Type: application/json
+
+{
+  "url": "https://example.com/article"
+}
+```
+
+**Parameters:**
+- `url` (string, required) - URL to score
+
+**Response:**
+```json
+{
+  "url": "https://example.com/article",
+  "score": {
+    "score": 0.85,
+    "reason": "High quality technical article with educational content",
+    "categories": ["technical", "education"],
+    "is_recommended": true,
+    "malicious_indicators": []
+  },
+  "meets_threshold": true,
+  "threshold": 0.5
+}
+```
+
+**Score Field Description:**
+- `score` (float) - Quality score from 0.0 to 1.0
+- `reason` (string) - Explanation for the assigned score
+- `categories` (array) - Detected content categories
+- `is_recommended` (boolean) - Whether the link meets the scraper's quality threshold
+- `malicious_indicators` (array) - Any detected suspicious patterns
+- `meets_threshold` (boolean) - Whether the score meets the controller's configured threshold
+- `threshold` (float) - The controller's configured minimum score for ingestion
+
+**Rejected Content Types:**
+- Social media platforms (Facebook, Twitter, Instagram, Reddit, etc.)
+- Gambling websites
+- Adult content / pornography
+- Drug marketplaces
+- Forums and chatrooms (except high-quality technical forums)
+- General marketplaces (eBay, Amazon, etc.)
+- Spam and clickbait
+- Malicious websites (phishing, malware, scams)
+
+**Accepted Content Types:**
+- News articles and journalism
+- Educational content and tutorials
+- Research papers and academic content
+- Technical documentation
+- Blog posts with substantive content
+- Government and official resources
+
+**Low Score Example:**
+```json
+{
+  "url": "https://facebook.com",
+  "score": {
+    "score": 0.2,
+    "reason": "Social media platform - not suitable for content ingestion",
+    "categories": ["social_media"],
+    "is_recommended": false,
+    "malicious_indicators": []
+  },
+  "meets_threshold": false,
+  "threshold": 0.5
+}
+```
+
+**Malicious Content Example:**
+```json
+{
+  "url": "https://suspicious-site.com",
+  "score": {
+    "score": 0.05,
+    "reason": "Suspected phishing site with misleading content",
+    "categories": ["malicious", "spam"],
+    "is_recommended": false,
+    "malicious_indicators": ["phishing", "suspicious_url"]
+  },
+  "meets_threshold": false,
+  "threshold": 0.5
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/score \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article"}'
+```
+
+**Use Case:** Use this endpoint to pre-screen URLs before submitting them for full scraping. This allows you to filter out low-quality or inappropriate content efficiently.
 
 ---
 
@@ -522,12 +656,18 @@ export SCRAPER_BASE_URL=http://localhost:8081
 export TEXTANALYZER_BASE_URL=http://localhost:8082
 export CONTROLLER_PORT=8080
 export DATABASE_PATH=./controller.db
+export LINK_SCORE_THRESHOLD=0.5
 ```
 
 - `SCRAPER_BASE_URL` - Scraper service URL (default: http://localhost:8081)
 - `TEXTANALYZER_BASE_URL` - TextAnalyzer service URL (default: http://localhost:8082)
 - `CONTROLLER_PORT` - HTTP server port (default: 8080)
 - `DATABASE_PATH` - SQLite database path (default: ./controller.db)
+- `LINK_SCORE_THRESHOLD` - Minimum quality score (0.0-1.0) for URL ingestion (default: 0.5)
+  - URLs scoring below this threshold will not be scraped or analyzed
+  - Only scoring metadata will be stored and returned
+  - Higher values (e.g., 0.7) increase quality but may filter more content
+  - Lower values (e.g., 0.3) allow more content but with lower quality standards
 
 ---
 

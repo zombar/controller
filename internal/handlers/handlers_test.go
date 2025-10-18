@@ -16,22 +16,57 @@ import (
 // mockScraperServer creates a mock scraper HTTP server
 func mockScraperServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/scrape" {
-			w.WriteHeader(http.StatusNotFound)
-			return
-		}
-
-		response := clients.ScraperResponse{
-			ID:      "scraper-test-uuid",
-			URL:     "https://example.com",
-			Content: "This is the main text from the scraped page.",
-			Metadata: map[string]interface{}{
-				"title": "Example Page",
-			},
-		}
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(response)
+
+		switch r.URL.Path {
+		case "/api/scrape":
+			response := clients.ScraperResponse{
+				ID:      "scraper-test-uuid",
+				URL:     "https://example.com",
+				Content: "This is the main text from the scraped page.",
+				Metadata: map[string]interface{}{
+					"title": "Example Page",
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(response)
+
+		case "/api/score":
+			// Parse the request to get the URL
+			var req clients.ScoreRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			// Return different scores based on URL
+			score := 0.8 // Default high score
+			reason := "High quality content"
+			categories := []string{"technical", "education"}
+
+			if req.URL == "https://social-media.com" || req.URL == "https://low-quality.com" {
+				score = 0.3
+				reason = "Social media platform - not suitable for ingestion"
+				categories = []string{"social_media"}
+			}
+
+			response := clients.ScoreResponse{
+				URL: req.URL,
+				Score: clients.LinkScore{
+					URL:                 req.URL,
+					Score:               score,
+					Reason:              reason,
+					Categories:          categories,
+					IsRecommended:       score >= 0.5,
+					MaliciousIndicators: []string{},
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(response)
+
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 }
 
@@ -70,7 +105,7 @@ func setupTestHandler(t *testing.T) (*Handler, *httptest.Server, *httptest.Serve
 	scraperClient := clients.NewScraperClient(scraperMock.URL)
 	textAnalyzerClient := clients.NewTextAnalyzerClient(textAnalyzerMock.URL)
 
-	handler := New(store, scraperClient, textAnalyzerClient)
+	handler := New(store, scraperClient, textAnalyzerClient, 0.5)
 
 	cleanup := func() {
 		store.Close()
@@ -363,5 +398,184 @@ func TestAnalyzeTextEmptyText(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestScoreLink(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	reqBody := ScoreLinkRequest{
+		URL: "https://example.com",
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/score", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ScoreLink(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if response["url"] != "https://example.com" {
+		t.Errorf("Expected URL 'https://example.com', got '%v'", response["url"])
+	}
+
+	score := response["score"].(map[string]interface{})
+	if score["score"].(float64) != 0.8 {
+		t.Errorf("Expected score 0.8, got %v", score["score"])
+	}
+
+	if response["meets_threshold"].(bool) != true {
+		t.Error("Expected meets_threshold to be true")
+	}
+
+	if response["threshold"].(float64) != 0.5 {
+		t.Errorf("Expected threshold 0.5, got %v", response["threshold"])
+	}
+}
+
+func TestScoreLinkLowScore(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	reqBody := ScoreLinkRequest{
+		URL: "https://social-media.com",
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/score", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ScoreLink(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	score := response["score"].(map[string]interface{})
+	if score["score"].(float64) != 0.3 {
+		t.Errorf("Expected score 0.3, got %v", score["score"])
+	}
+
+	if response["meets_threshold"].(bool) != false {
+		t.Error("Expected meets_threshold to be false")
+	}
+}
+
+func TestScrapeURLWithLowScore(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	reqBody := ScrapeURLRequest{
+		URL: "https://low-quality.com",
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ScrapeURL(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("Expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response ControllerResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	// When score is below threshold, scraper and analyzer UUIDs should not be set
+	if response.ScraperUUID != nil {
+		t.Error("Expected scraper UUID to be nil for low-scoring URL")
+	}
+
+	if response.TextAnalyzerUUID != "" {
+		t.Error("Expected analyzer UUID to be empty for low-scoring URL")
+	}
+
+	// Check that metadata contains link_score and below_threshold flag
+	metadata := response.Metadata
+	if metadata["below_threshold"] != true {
+		t.Error("Expected below_threshold to be true")
+	}
+
+	linkScore, ok := metadata["link_score"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected link_score in metadata")
+	}
+
+	if linkScore["score"].(float64) != 0.3 {
+		t.Errorf("Expected link score 0.3, got %v", linkScore["score"])
+	}
+}
+
+func TestScrapeURLWithHighScore(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	reqBody := ScrapeURLRequest{
+		URL: "https://example.com",
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ScrapeURL(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("Expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response ControllerResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	// When score is above threshold, both UUIDs should be set
+	if response.ScraperUUID == nil {
+		t.Error("Expected scraper UUID to be set for high-scoring URL")
+	}
+
+	if response.TextAnalyzerUUID == "" {
+		t.Error("Expected analyzer UUID to be set for high-scoring URL")
+	}
+
+	// Check that metadata contains link_score
+	metadata := response.Metadata
+	linkScore, ok := metadata["link_score"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected link_score in metadata")
+	}
+
+	if linkScore["score"].(float64) != 0.8 {
+		t.Errorf("Expected link score 0.8, got %v", linkScore["score"])
+	}
+
+	// Should also have scraper and analyzer metadata
+	if _, ok := metadata["scraper_metadata"]; !ok {
+		t.Error("Expected scraper_metadata in response")
+	}
+
+	if _, ok := metadata["analyzer_metadata"]; !ok {
+		t.Error("Expected analyzer_metadata in response")
 	}
 }
