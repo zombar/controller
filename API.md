@@ -181,6 +181,70 @@ curl -X POST http://localhost:8080/search/tags \
 
 ---
 
+### Search Images by Tags
+
+Search for images across all scraped content using fuzzy tag matching. This endpoint queries the scraper service for images with matching tags.
+
+**Request:**
+```http
+POST /api/images/search
+Content-Type: application/json
+
+{
+  "tags": ["cat", "animal"]
+}
+```
+
+**Parameters:**
+- `tags` (array of strings, required) - Tags to search for (fuzzy matching)
+
+**Response:**
+```json
+{
+  "images": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "url": "https://example.com/cat.jpg",
+      "alt_text": "A cat photo",
+      "summary": "Image shows a domestic cat...",
+      "tags": ["cat", "animal", "pet"],
+      "base64_data": "iVBORw0KGgoAAAANSUhEUgAAAAEA..."
+    },
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440001",
+      "url": "https://example.com/wildlife.jpg",
+      "alt_text": "Wildlife scene",
+      "summary": "Image depicts various animals in nature...",
+      "tags": ["animals", "wildlife", "nature"],
+      "base64_data": "iVBORw0KGgoAAAANSUhEUgAAAAEA..."
+    }
+  ],
+  "count": 2
+}
+```
+
+**Fuzzy Matching:** Searches are case-insensitive and match substrings. For example:
+- Searching for "cat" will match images with tags: "cat", "cats", "wildcat", "scatter"
+- Searching for "anim" will match images with tags: "animal", "animation", "animals"
+
+**Error Response (400):**
+```json
+{
+  "error": "At least one tag is required"
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/images/search \
+  -H "Content-Type: application/json" \
+  -d '{"tags": ["cat", "dog"]}'
+```
+
+**Note:** This endpoint is a pass-through to the scraper service's image search functionality. All images stored in the scraper's database can be searched.
+
+---
+
 ### Get Request by ID
 
 Retrieve detailed information about a specific request.
