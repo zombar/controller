@@ -41,6 +41,7 @@ func main() {
 	mux.HandleFunc("/api/scrape", handler.ScrapeURL)
 	mux.HandleFunc("/api/analyze", handler.AnalyzeText)
 	mux.HandleFunc("/api/search", handler.SearchTags)
+	mux.HandleFunc("/api/images/search", handler.SearchImageTags)
 	mux.HandleFunc("/api/requests/", handler.GetRequest)
 	mux.HandleFunc("/api/requests", handler.ListRequests)
 

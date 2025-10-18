@@ -323,6 +323,44 @@ func (h *Handler) ListRequests(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, response, http.StatusOK)
 }
 
+// SearchImageTagsRequest represents a request to search images by tags
+type SearchImageTagsRequest struct {
+	Tags []string `json:"tags"`
+}
+
+// SearchImageTags handles fuzzy search for images by tags
+func (h *Handler) SearchImageTags(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req SearchImageTagsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Tags) == 0 {
+		respondError(w, "At least one tag is required", http.StatusBadRequest)
+		return
+	}
+
+	// Call scraper service to search images by tags (fuzzy matching)
+	searchResp, err := h.scraper.SearchImagesByTags(req.Tags)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to search images: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"images": searchResp.Images,
+		"count":  searchResp.Count,
+	}
+
+	respondJSON(w, response, http.StatusOK)
+}
+
 // Health check endpoint
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

@@ -73,3 +73,59 @@ func (c *ScraperClient) Scrape(url string) (*ScraperResponse, error) {
 
 	return &scraperResp, nil
 }
+
+// ImageInfo represents image data from the scraper service
+type ImageInfo struct {
+	ID         string   `json:"id,omitempty"`
+	URL        string   `json:"url"`
+	AltText    string   `json:"alt_text"`
+	Summary    string   `json:"summary"`
+	Tags       []string `json:"tags"`
+	Base64Data string   `json:"base64_data,omitempty"`
+}
+
+// ImageSearchRequest represents a request to search images by tags
+type ImageSearchRequest struct {
+	Tags []string `json:"tags"`
+}
+
+// ImageSearchResponse represents the response from image search
+type ImageSearchResponse struct {
+	Images []*ImageInfo `json:"images"`
+	Count  int          `json:"count"`
+}
+
+// SearchImagesByTags searches for images by tags using the scraper service
+func (c *ScraperClient) SearchImagesByTags(tags []string) (*ImageSearchResponse, error) {
+	reqBody := ImageSearchRequest{Tags: tags}
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post(
+		fmt.Sprintf("%s/api/images/search", c.baseURL),
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request to scraper: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("scraper service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var searchResp ImageSearchResponse
+	if err := json.Unmarshal(body, &searchResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &searchResp, nil
+}
