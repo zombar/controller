@@ -12,6 +12,7 @@ type Config struct {
 	TextAnalyzerBaseURL string
 	Port                int
 	DatabasePath        string
+	LinkScoreThreshold  float64 // Minimum score for link recommendation (0.0-1.0)
 }
 
 // Load reads configuration from environment variables
@@ -21,6 +22,7 @@ func Load() (*Config, error) {
 		TextAnalyzerBaseURL: getEnv("TEXTANALYZER_BASE_URL", "http://localhost:8082"),
 		Port:                getEnvAsInt("CONTROLLER_PORT", 8080),
 		DatabasePath:        getEnv("DATABASE_PATH", "./controller.db"),
+		LinkScoreThreshold:  getEnvAsFloat("LINK_SCORE_THRESHOLD", 0.5),
 	}
 
 	if err := config.Validate(); err != nil {
@@ -44,6 +46,9 @@ func (c *Config) Validate() error {
 	if c.DatabasePath == "" {
 		return fmt.Errorf("DATABASE_PATH is required")
 	}
+	if c.LinkScoreThreshold < 0.0 || c.LinkScoreThreshold > 1.0 {
+		return fmt.Errorf("LINK_SCORE_THRESHOLD must be between 0.0 and 1.0")
+	}
 	return nil
 }
 
@@ -61,6 +66,18 @@ func getEnvAsInt(key string, defaultValue int) int {
 		return defaultValue
 	}
 	value, err := strconv.Atoi(valueStr)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvAsFloat(key string, defaultValue float64) float64 {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseFloat(valueStr, 64)
 	if err != nil {
 		return defaultValue
 	}

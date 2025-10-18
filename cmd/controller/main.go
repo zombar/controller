@@ -33,13 +33,14 @@ func main() {
 	textAnalyzerClient := clients.NewTextAnalyzerClient(cfg.TextAnalyzerBaseURL)
 
 	// Initialize handlers
-	handler := handlers.New(store, scraperClient, textAnalyzerClient)
+	handler := handlers.New(store, scraperClient, textAnalyzerClient, cfg.LinkScoreThreshold)
 
 	// Setup routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handler.Health)
 	mux.HandleFunc("/api/scrape", handler.ScrapeURL)
 	mux.HandleFunc("/api/analyze", handler.AnalyzeText)
+	mux.HandleFunc("/api/score", handler.ScoreLink)
 	mux.HandleFunc("/api/search", handler.SearchTags)
 	mux.HandleFunc("/api/images/search", handler.SearchImageTags)
 	mux.HandleFunc("/api/requests/", handler.GetRequest)
@@ -62,6 +63,7 @@ func main() {
 		log.Printf("Scraper URL: %s", cfg.ScraperBaseURL)
 		log.Printf("TextAnalyzer URL: %s", cfg.TextAnalyzerBaseURL)
 		log.Printf("Database: %s", cfg.DatabasePath)
+		log.Printf("Link Score Threshold: %.2f", cfg.LinkScoreThreshold)
 
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server failed: %v", err)

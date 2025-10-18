@@ -14,17 +14,19 @@ import (
 
 // Handler contains all HTTP handlers
 type Handler struct {
-	storage      *storage.Storage
-	scraper      *clients.ScraperClient
-	textAnalyzer *clients.TextAnalyzerClient
+	storage            *storage.Storage
+	scraper            *clients.ScraperClient
+	textAnalyzer       *clients.TextAnalyzerClient
+	linkScoreThreshold float64
 }
 
 // New creates a new Handler
-func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient) *Handler {
+func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, linkScoreThreshold float64) *Handler {
 	return &Handler{
-		storage:      store,
-		scraper:      scraper,
-		textAnalyzer: textAnalyzer,
+		storage:            store,
+		scraper:            scraper,
+		textAnalyzer:       textAnalyzer,
+		linkScoreThreshold: linkScoreThreshold,
 	}
 }
 
@@ -61,7 +63,7 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
-// ScrapeURL handles URL scraping and text analysis
+// ScrapeURL handles URL scraping and text analysis with quality scoring
 func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -79,7 +81,57 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Call scraper service
+	// Score the link first to determine if it should be fully processed
+	scoreResp, err := h.scraper.ScoreLink(req.URL)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to score URL: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Create controller request record
+	controllerID := uuid.New().String()
+
+	// Check if score meets threshold
+	if scoreResp.Score.Score < h.linkScoreThreshold {
+		// Score is below threshold - return scoring metadata only
+		record := &storage.Request{
+			ID:         controllerID,
+			CreatedAt:  time.Now().UTC(),
+			SourceType: "url",
+			SourceURL:  &req.URL,
+			Tags:       scoreResp.Score.Categories,
+			Metadata: map[string]interface{}{
+				"link_score": map[string]interface{}{
+					"score":                scoreResp.Score.Score,
+					"reason":               scoreResp.Score.Reason,
+					"categories":           scoreResp.Score.Categories,
+					"is_recommended":       scoreResp.Score.IsRecommended,
+					"malicious_indicators": scoreResp.Score.MaliciousIndicators,
+				},
+				"below_threshold": true,
+				"threshold":       h.linkScoreThreshold,
+			},
+		}
+
+		if err := h.storage.SaveRequest(record); err != nil {
+			respondError(w, fmt.Sprintf("Failed to save request: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		response := ControllerResponse{
+			ID:         record.ID,
+			CreatedAt:  record.CreatedAt,
+			SourceType: record.SourceType,
+			SourceURL:  record.SourceURL,
+			Tags:       record.Tags,
+			Metadata:   record.Metadata,
+		}
+
+		respondJSON(w, response, http.StatusCreated)
+		return
+	}
+
+	// Score meets or exceeds threshold - proceed with full scraping and analysis
 	scraperResp, err := h.scraper.Scrape(req.URL)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to scrape URL: %v", err), http.StatusInternalServerError)
@@ -93,11 +145,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create controller request record
-	controllerID := uuid.New().String()
-
 	// Build scraper metadata from the scraper response
-	// Extract the core fields we want to expose
 	scraperMetadata := make(map[string]interface{})
 	scraperMetadata["title"] = scraperResp.Title
 	scraperMetadata["content"] = scraperResp.Content
@@ -110,6 +158,32 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Build combined metadata
+	combinedMetadata := map[string]interface{}{
+		"scraper_metadata":  scraperMetadata,
+		"analyzer_metadata": analyzerResp.Metadata,
+	}
+
+	// Add link score from scraper response if available, otherwise use preliminary score
+	if scraperResp.Score != nil {
+		combinedMetadata["link_score"] = map[string]interface{}{
+			"score":                scraperResp.Score.Score,
+			"reason":               scraperResp.Score.Reason,
+			"categories":           scraperResp.Score.Categories,
+			"is_recommended":       scraperResp.Score.IsRecommended,
+			"malicious_indicators": scraperResp.Score.MaliciousIndicators,
+		}
+	} else {
+		// Fallback to preliminary score if scraper didn't return one
+		combinedMetadata["link_score"] = map[string]interface{}{
+			"score":                scoreResp.Score.Score,
+			"reason":               scoreResp.Score.Reason,
+			"categories":           scoreResp.Score.Categories,
+			"is_recommended":       scoreResp.Score.IsRecommended,
+			"malicious_indicators": scoreResp.Score.MaliciousIndicators,
+		}
+	}
+
 	record := &storage.Request{
 		ID:               controllerID,
 		CreatedAt:        time.Now().UTC(),
@@ -118,10 +192,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		ScraperUUID:      &scraperResp.ID,
 		TextAnalyzerUUID: analyzerResp.ID,
 		Tags:             analyzerResp.GetTags(),
-		Metadata: map[string]interface{}{
-			"scraper_metadata":  scraperMetadata,
-			"analyzer_metadata": analyzerResp.Metadata,
-		},
+		Metadata:         combinedMetadata,
 	}
 
 	if err := h.storage.SaveRequest(record); err != nil {
@@ -356,6 +427,52 @@ func (h *Handler) SearchImageTags(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"images": searchResp.Images,
 		"count":  searchResp.Count,
+	}
+
+	respondJSON(w, response, http.StatusOK)
+}
+
+// ScoreLinkRequest represents a request to score a link
+type ScoreLinkRequest struct {
+	URL string `json:"url"`
+}
+
+// ScoreLink handles link quality scoring
+func (h *Handler) ScoreLink(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ScoreLinkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.URL == "" {
+		respondError(w, "URL is required", http.StatusBadRequest)
+		return
+	}
+
+	// Call scraper service to score the link
+	scoreResp, err := h.scraper.ScoreLink(req.URL)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to score link: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"url": scoreResp.URL,
+		"score": map[string]interface{}{
+			"score":                scoreResp.Score.Score,
+			"reason":               scoreResp.Score.Reason,
+			"categories":           scoreResp.Score.Categories,
+			"is_recommended":       scoreResp.Score.IsRecommended,
+			"malicious_indicators": scoreResp.Score.MaliciousIndicators,
+		},
+		"meets_threshold": scoreResp.Score.Score >= h.linkScoreThreshold,
+		"threshold":       h.linkScoreThreshold,
 	}
 
 	respondJSON(w, response, http.StatusOK)

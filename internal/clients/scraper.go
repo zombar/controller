@@ -27,6 +27,7 @@ type ScraperResponse struct {
 	Title    string                 `json:"title"`
 	Content  string                 `json:"content"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
+	Score    *LinkScore             `json:"score,omitempty"` // Quality score for the URL
 }
 
 // NewScraperClient creates a new scraper client
@@ -128,4 +129,61 @@ func (c *ScraperClient) SearchImagesByTags(tags []string) (*ImageSearchResponse,
 	}
 
 	return &searchResp, nil
+}
+
+// LinkScore represents a scored link with quality assessment
+type LinkScore struct {
+	URL                 string   `json:"url"`
+	Score               float64  `json:"score"`
+	Reason              string   `json:"reason"`
+	Categories          []string `json:"categories"`
+	IsRecommended       bool     `json:"is_recommended"`
+	MaliciousIndicators []string `json:"malicious_indicators,omitempty"`
+	AIUsed              bool     `json:"ai_used"`
+}
+
+// ScoreRequest represents a request to score a URL
+type ScoreRequest struct {
+	URL string `json:"url"`
+}
+
+// ScoreResponse represents a response containing link score
+type ScoreResponse struct {
+	URL   string    `json:"url"`
+	Score LinkScore `json:"score"`
+}
+
+// ScoreLink scores a URL using the scraper service
+func (c *ScraperClient) ScoreLink(url string) (*ScoreResponse, error) {
+	reqBody := ScoreRequest{URL: url}
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post(
+		fmt.Sprintf("%s/api/score", c.baseURL),
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request to scraper: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("scraper service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var scoreResp ScoreResponse
+	if err := json.Unmarshal(body, &scoreResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &scoreResp, nil
 }
