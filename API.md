@@ -379,6 +379,227 @@ curl -X POST http://localhost:8080/api/images/search \
 
 ---
 
+### Extract Links
+
+Extract and filter links from a URL using AI-powered content analysis. This endpoint identifies substantive links (articles, blog posts, research papers) while filtering out navigation, social media buttons, ads, and spam.
+
+**Request:**
+```http
+POST /api/extract-links
+Content-Type: application/json
+
+{
+  "url": "https://example.com"
+}
+```
+
+**Parameters:**
+- `url` (string, required) - URL to extract links from
+
+**Response:**
+```json
+{
+  "url": "https://example.com",
+  "links": [
+    "https://example.com/article-1",
+    "https://example.com/article-2",
+    "https://example.com/blog/important-post"
+  ],
+  "count": 3
+}
+```
+
+**Response Fields:**
+- `url` (string) - The URL that was processed
+- `links` (array) - Array of filtered, substantive links found on the page
+- `count` (integer) - Number of links returned
+
+**AI Filtering:** The endpoint uses Ollama to intelligently filter links, including only:
+- Articles and blog posts
+- Research papers and publications
+- Documentation and guides
+- News content
+- Educational resources
+
+**Excluded Link Types:**
+- Navigation menus and breadcrumbs
+- Social media share buttons
+- Footer links
+- Advertisements
+- "Load more" pagination
+- Cookie consent and privacy policy links
+
+**Error Response (400):**
+```json
+{
+  "error": "URL is required"
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/extract-links \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com"}'
+```
+
+**Use Case:** Use this endpoint to discover content from a landing page or index page. The AI filtering ensures you only get meaningful content links for further processing.
+
+---
+
+### Batch Scrape
+
+Scrape multiple URLs concurrently with caching support. This endpoint allows efficient batch processing of URLs with automatic database caching to avoid redundant scraping.
+
+**Request:**
+```http
+POST /api/scrape/batch
+Content-Type: application/json
+
+{
+  "urls": [
+    "https://example.com/article-1",
+    "https://example.com/article-2",
+    "https://example.org/post"
+  ],
+  "force": false
+}
+```
+
+**Parameters:**
+- `urls` (array of strings, required) - URLs to scrape (maximum 50 per request)
+- `force` (boolean, optional) - Bypass cache and force re-scrape (default: false)
+
+**Response:**
+```json
+{
+  "results": [
+    {
+      "url": "https://example.com/article-1",
+      "success": true,
+      "cached": true,
+      "data": {
+        "id": "abc123",
+        "url": "https://example.com/article-1",
+        "title": "Example Article",
+        "content": "Article content...",
+        "images": [],
+        "links": [],
+        "fetched_at": "2025-10-17T12:34:56.789Z",
+        "created_at": "2025-10-17T12:34:56.789Z",
+        "processing_time_seconds": 2.5,
+        "cached": true,
+        "metadata": {
+          "description": "Article description",
+          "keywords": ["example", "article"],
+          "author": "John Doe",
+          "published_date": "2025-10-15"
+        }
+      }
+    },
+    {
+      "url": "https://example.com/article-2",
+      "success": true,
+      "cached": false,
+      "data": {
+        "id": "def456",
+        "url": "https://example.com/article-2",
+        "title": "Another Article",
+        "content": "More content...",
+        "images": [],
+        "links": [],
+        "fetched_at": "2025-10-17T12:35:10.123Z",
+        "created_at": "2025-10-17T12:35:10.123Z",
+        "processing_time_seconds": 3.2,
+        "cached": false,
+        "metadata": {}
+      }
+    },
+    {
+      "url": "https://invalid-url.com",
+      "success": false,
+      "error": "failed to fetch page",
+      "cached": false
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "success": 2,
+    "failed": 1,
+    "cached": 1,
+    "scraped": 1
+  }
+}
+```
+
+**Response Fields:**
+
+**Per-URL Result:**
+- `url` (string) - The URL that was processed
+- `success` (boolean) - Whether the scrape succeeded
+- `cached` (boolean) - Whether the result was served from cache
+- `data` (object, optional) - Scraped data (only present if success=true)
+- `error` (string, optional) - Error message (only present if success=false)
+
+**Summary Statistics:**
+- `total` (integer) - Total number of URLs processed
+- `success` (integer) - Number of successful scrapes
+- `failed` (integer) - Number of failed scrapes
+- `cached` (integer) - Number of cached results
+- `scraped` (integer) - Number of newly scraped URLs
+
+**Caching Behavior:**
+- By default (`force: false`), checks database for existing scraped data
+- Cached results return immediately without re-scraping
+- Set `force: true` to bypass cache and force fresh scrape
+- Failed URLs do not affect successful ones
+
+**Concurrency:** URLs are processed concurrently using goroutines for optimal performance.
+
+**Limitations:**
+- Maximum 50 URLs per request
+- Individual URL timeout: 10 minutes
+- Failed URLs return error details in their result object
+
+**Error Response (400):**
+```json
+{
+  "error": "At least one URL is required"
+}
+```
+
+```json
+{
+  "error": "Maximum 50 URLs allowed per batch request"
+}
+```
+
+**Example:**
+```bash
+# Batch scrape with caching
+curl -X POST http://localhost:8080/api/scrape/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "urls": [
+      "https://example.com/article-1",
+      "https://example.com/article-2"
+    ],
+    "force": false
+  }'
+
+# Force re-scrape (bypass cache)
+curl -X POST http://localhost:8080/api/scrape/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "urls": ["https://example.com/article-1"],
+    "force": true
+  }'
+```
+
+**Use Case:** Use this endpoint to efficiently process multiple URLs discovered from the Extract Links endpoint or from other sources. The caching system ensures you don't waste resources re-scraping content that hasn't changed.
+
+---
+
 ### Get Request by ID
 
 Retrieve detailed information about a specific request.
@@ -567,6 +788,26 @@ async function listRequests(limit = 50, offset = 0): Promise<RequestList> {
   );
   return response.json();
 }
+
+// Extract links from URL
+async function extractLinks(url: string): Promise<ExtractLinksResponse> {
+  const response = await fetch('http://localhost:8080/api/extract-links', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url })
+  });
+  return response.json();
+}
+
+// Batch scrape multiple URLs
+async function batchScrape(urls: string[], force = false): Promise<BatchScrapeResponse> {
+  const response = await fetch('http://localhost:8080/api/scrape/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ urls, force })
+  });
+  return response.json();
+}
 ```
 
 ### Python
@@ -610,6 +851,22 @@ def list_requests(limit: int = 50, offset: int = 0) -> dict:
         params={'limit': limit, 'offset': offset}
     )
     return response.json()
+
+# Extract links from URL
+def extract_links(url: str) -> dict:
+    response = requests.post(
+        'http://localhost:8080/api/extract-links',
+        json={'url': url}
+    )
+    return response.json()
+
+# Batch scrape multiple URLs
+def batch_scrape(urls: list[str], force: bool = False) -> dict:
+    response = requests.post(
+        'http://localhost:8080/api/scrape/batch',
+        json={'urls': urls, 'force': force}
+    )
+    return response.json()
 ```
 
 ### cURL
@@ -643,6 +900,22 @@ curl http://localhost:8080/requests/550e8400-e29b-41d4-a716-446655440000
 
 # List all requests
 curl "http://localhost:8080/requests?limit=10&offset=0"
+
+# Extract links from URL
+curl -X POST http://localhost:8080/api/extract-links \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com"}'
+
+# Batch scrape multiple URLs
+curl -X POST http://localhost:8080/api/scrape/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "urls": [
+      "https://example.com/article-1",
+      "https://example.com/article-2"
+    ],
+    "force": false
+  }'
 ```
 
 ---

@@ -478,6 +478,84 @@ func (h *Handler) ScoreLink(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, response, http.StatusOK)
 }
 
+// ExtractLinksRequest represents a request to extract links from a URL
+type ExtractLinksRequest struct {
+	URL string `json:"url"`
+}
+
+// ExtractLinks handles extracting links from a URL
+func (h *Handler) ExtractLinks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ExtractLinksRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.URL == "" {
+		respondError(w, "URL is required", http.StatusBadRequest)
+		return
+	}
+
+	// Call scraper service to extract links
+	extractResp, err := h.scraper.ExtractLinks(req.URL)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to extract links: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"url":   extractResp.URL,
+		"links": extractResp.Links,
+		"count": extractResp.Count,
+	}
+
+	respondJSON(w, response, http.StatusOK)
+}
+
+// BatchScrapeRequest represents a request to scrape multiple URLs
+type BatchScrapeRequest struct {
+	URLs  []string `json:"urls"`
+	Force bool     `json:"force"`
+}
+
+// BatchScrape handles scraping multiple URLs
+func (h *Handler) BatchScrape(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req BatchScrapeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if len(req.URLs) == 0 {
+		respondError(w, "At least one URL is required", http.StatusBadRequest)
+		return
+	}
+
+	// Call scraper service to batch scrape
+	batchResp, err := h.scraper.BatchScrape(req.URLs, req.Force)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to batch scrape: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"results": batchResp.Results,
+		"summary": batchResp.Summary,
+	}
+
+	respondJSON(w, response, http.StatusOK)
+}
+
 // Health check endpoint
 func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
