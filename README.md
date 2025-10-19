@@ -6,6 +6,8 @@ A central orchestration service that coordinates the scraper and textanalyzer mi
 
 - Orchestrates scraper and textanalyzer services
 - Unified API for URL scraping with automatic text analysis
+- Asynchronous scrape request processing with progress tracking
+- In-memory scrape request management with auto-expiration
 - Direct text analysis without scraping
 - AI-powered link extraction and filtering
 - Batch URL scraping with caching support
@@ -93,6 +95,23 @@ curl -X POST http://localhost:8080/api/extract-links \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com"}'
 
+# Create async scrape request
+curl -X POST http://localhost:8080/api/scrape-requests \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article"}'
+
+# List scrape requests
+curl http://localhost:8080/api/scrape-requests
+
+# Get scrape request status
+curl http://localhost:8080/api/scrape-requests/550e8400-e29b-41d4-a716-446655440000
+
+# Retry failed scrape request
+curl -X POST http://localhost:8080/api/scrape-requests/550e8400-e29b-41d4-a716-446655440000/retry
+
+# Delete scrape request
+curl -X DELETE http://localhost:8080/api/scrape-requests/550e8400-e29b-41d4-a716-446655440000
+
 # Batch scrape multiple URLs
 curl -X POST http://localhost:8080/api/scrape/batch \
   -H "Content-Type: application/json" \
@@ -144,6 +163,14 @@ The controller acts as an orchestrator for the scraper and textanalyzer services
 2. Controller calls textanalyzer service
 3. Controller stores UUID and tags
 4. Controller returns analysis result
+
+**Async Scrape Request Flow:**
+1. Client creates scrape request
+2. Controller returns request with UUID and pending status
+3. Background goroutine processes request asynchronously
+4. Client polls for status updates with progress percentage
+5. On completion, result is stored and linked to scrape request
+6. Requests auto-expire after 15 minutes
 
 ## Output Format
 
@@ -229,6 +256,9 @@ controller/
 │   ├── handlers/
 │   │   ├── handlers.go         # HTTP handlers
 │   │   └── handlers_test.go    # Handler tests
+│   ├── scraper_requests/
+│   │   ├── scraper_requests.go # In-memory scrape request manager
+│   │   └── scraper_requests_test.go # Manager tests
 │   └── storage/
 │       ├── migrations.go       # Database migrations
 │       ├── storage.go          # Database operations

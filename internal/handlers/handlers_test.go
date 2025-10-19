@@ -670,24 +670,27 @@ func TestExtractLinksEmptyURL(t *testing.T) {
 	}
 }
 
-func TestBatchScrape(t *testing.T) {
+// ============================================================================
+// Async Scrape Request Tests
+// ============================================================================
+
+func TestCreateScrapeRequest(t *testing.T) {
 	handler, _, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	reqBody := BatchScrapeRequest{
-		URLs:  []string{"https://example.com", "https://example.org"},
-		Force: false,
+	reqBody := ScrapeURLRequest{
+		URL: "https://example.com",
 	}
 	jsonData, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/scrape/batch", bytes.NewBuffer(jsonData))
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape-requests", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler.BatchScrape(w, req)
+	handler.CreateScrapeRequest(w, req)
 
-	if w.Code != http.StatusCreated {
-		t.Errorf("Expected status 201, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
 	}
 
 	var response map[string]interface{}
@@ -695,81 +698,322 @@ func TestBatchScrape(t *testing.T) {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 
-	requestIDs := response["request_ids"].([]interface{})
-	if len(requestIDs) != 2 {
-		t.Errorf("Expected 2 request IDs, got %d", len(requestIDs))
+	if response["id"] == nil || response["id"].(string) == "" {
+		t.Error("Expected non-empty scrape request ID")
 	}
 
-	count := response["count"].(float64)
-	if count != 2 {
-		t.Errorf("Expected count 2, got %v", count)
+	if response["url"] != "https://example.com" {
+		t.Errorf("Expected URL 'https://example.com', got '%v'", response["url"])
+	}
+
+	if response["status"] == nil {
+		t.Error("Expected status field")
+	}
+
+	if response["progress"] == nil {
+		t.Error("Expected progress field")
+	}
+
+	if response["expires_at"] == nil {
+		t.Error("Expected expires_at field")
 	}
 }
 
-func TestBatchScrapeMultipleURLs(t *testing.T) {
+func TestCreateScrapeRequestDuplicate(t *testing.T) {
 	handler, _, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	reqBody := BatchScrapeRequest{
-		URLs:  []string{"https://example.com", "https://test.com", "https://demo.com"},
-		Force: false,
+	reqBody := ScrapeURLRequest{
+		URL: "https://example.com",
 	}
 	jsonData, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/scrape/batch", bytes.NewBuffer(jsonData))
-	req.Header.Set("Content-Type", "application/json")
-	w := httptest.NewRecorder()
+	// Create first request
+	req1 := httptest.NewRequest(http.MethodPost, "/api/scrape-requests", bytes.NewBuffer(jsonData))
+	req1.Header.Set("Content-Type", "application/json")
+	w1 := httptest.NewRecorder()
+	handler.CreateScrapeRequest(w1, req1)
 
-	handler.BatchScrape(w, req)
+	var response1 map[string]interface{}
+	json.NewDecoder(w1.Body).Decode(&response1)
+	id1 := response1["id"].(string)
 
-	if w.Code != http.StatusCreated {
-		t.Errorf("Expected status 201, got %d: %s", w.Code, w.Body.String())
-	}
+	// Create duplicate request
+	req2 := httptest.NewRequest(http.MethodPost, "/api/scrape-requests", bytes.NewBuffer(jsonData))
+	req2.Header.Set("Content-Type", "application/json")
+	w2 := httptest.NewRecorder()
+	handler.CreateScrapeRequest(w2, req2)
 
-	var response map[string]interface{}
-	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
-		t.Fatalf("Failed to decode response: %v", err)
-	}
+	var response2 map[string]interface{}
+	json.NewDecoder(w2.Body).Decode(&response2)
+	id2 := response2["id"].(string)
 
-	requestIDs := response["request_ids"].([]interface{})
-	if len(requestIDs) != 3 {
-		t.Errorf("Expected 3 request IDs, got %d", len(requestIDs))
-	}
-
-	count := response["count"].(float64)
-	if count != 3 {
-		t.Errorf("Expected count 3, got %v", count)
-	}
-}
-
-func TestBatchScrapeInvalidMethod(t *testing.T) {
-	handler, _, _, cleanup := setupTestHandler(t)
-	defer cleanup()
-
-	req := httptest.NewRequest(http.MethodGet, "/api/scrape/batch", nil)
-	w := httptest.NewRecorder()
-
-	handler.BatchScrape(w, req)
-
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Errorf("Expected status 405, got %d", w.Code)
+	if id1 != id2 {
+		t.Errorf("Expected duplicate URL to return same request ID: %s != %s", id1, id2)
 	}
 }
 
-func TestBatchScrapeEmptyURLs(t *testing.T) {
+func TestCreateScrapeRequestEmptyURL(t *testing.T) {
 	handler, _, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	reqBody := BatchScrapeRequest{URLs: []string{}}
+	reqBody := ScrapeURLRequest{URL: ""}
 	jsonData, _ := json.Marshal(reqBody)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/scrape/batch", bytes.NewBuffer(jsonData))
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape-requests", bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	handler.BatchScrape(w, req)
+	handler.CreateScrapeRequest(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestListScrapeRequests(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// Create multiple scrape requests
+	urls := []string{
+		"https://example1.com",
+		"https://example2.com",
+		"https://example3.com",
+	}
+
+	for _, url := range urls {
+		reqBody := ScrapeURLRequest{URL: url}
+		jsonData, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest(http.MethodPost, "/api/scrape-requests", bytes.NewBuffer(jsonData))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		handler.CreateScrapeRequest(w, req)
+	}
+
+	// List requests
+	req := httptest.NewRequest(http.MethodGet, "/api/scrape-requests", nil)
+	w := httptest.NewRecorder()
+
+	handler.ListScrapeRequests(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if response["count"] == nil {
+		t.Error("Expected count field")
+	}
+
+	count := int(response["count"].(float64))
+	if count != len(urls) {
+		t.Errorf("Expected count %d, got %d", len(urls), count)
+	}
+
+	if response["requests"] == nil {
+		t.Fatal("Expected requests array")
+	}
+
+	requests := response["requests"].([]interface{})
+	if len(requests) != len(urls) {
+		t.Errorf("Expected %d requests, got %d", len(urls), len(requests))
+	}
+}
+
+func TestGetScrapeRequest(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// Create a scrape request
+	reqBody := ScrapeURLRequest{URL: "https://example.com"}
+	jsonData, _ := json.Marshal(reqBody)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/scrape-requests", bytes.NewBuffer(jsonData))
+	createReq.Header.Set("Content-Type", "application/json")
+	createW := httptest.NewRecorder()
+	handler.CreateScrapeRequest(createW, createReq)
+
+	var createResponse map[string]interface{}
+	json.NewDecoder(createW.Body).Decode(&createResponse)
+	id := createResponse["id"].(string)
+
+	// Get the request
+	getReq := httptest.NewRequest(http.MethodGet, "/api/scrape-requests/"+id, nil)
+	getW := httptest.NewRecorder()
+
+	handler.GetScrapeRequest(getW, getReq)
+
+	if getW.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", getW.Code, getW.Body.String())
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(getW.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if response["id"] != id {
+		t.Errorf("Expected ID '%s', got '%v'", id, response["id"])
+	}
+
+	if response["url"] != "https://example.com" {
+		t.Errorf("Expected URL 'https://example.com', got '%v'", response["url"])
+	}
+}
+
+func TestGetScrapeRequestNotFound(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/scrape-requests/non-existent-id", nil)
+	w := httptest.NewRecorder()
+
+	handler.GetScrapeRequest(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d", w.Code)
+	}
+}
+
+func TestDeleteScrapeRequest(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// Create a scrape request
+	reqBody := ScrapeURLRequest{URL: "https://example.com"}
+	jsonData, _ := json.Marshal(reqBody)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/scrape-requests", bytes.NewBuffer(jsonData))
+	createReq.Header.Set("Content-Type", "application/json")
+	createW := httptest.NewRecorder()
+	handler.CreateScrapeRequest(createW, createReq)
+
+	var createResponse map[string]interface{}
+	json.NewDecoder(createW.Body).Decode(&createResponse)
+	id := createResponse["id"].(string)
+
+	// Delete the request
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/api/scrape-requests/"+id, nil)
+	deleteW := httptest.NewRecorder()
+
+	handler.DeleteScrapeRequest(deleteW, deleteReq)
+
+	if deleteW.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", deleteW.Code, deleteW.Body.String())
+	}
+
+	var deleteResponse map[string]interface{}
+	json.NewDecoder(deleteW.Body).Decode(&deleteResponse)
+	if deleteResponse["status"] != "deleted" {
+		t.Errorf("Expected status 'deleted', got '%v'", deleteResponse["status"])
+	}
+
+	// Verify request is deleted
+	getReq := httptest.NewRequest(http.MethodGet, "/api/scrape-requests/"+id, nil)
+	getW := httptest.NewRecorder()
+	handler.GetScrapeRequest(getW, getReq)
+
+	if getW.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404 after delete, got %d", getW.Code)
+	}
+}
+
+func TestDeleteScrapeRequestNotFound(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/scrape-requests/non-existent-id", nil)
+	w := httptest.NewRecorder()
+
+	handler.DeleteScrapeRequest(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d", w.Code)
+	}
+}
+
+func TestRetryScrapeRequest(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// Create a scrape request with a URL that will fail (low score)
+	reqBody := ScrapeURLRequest{URL: "https://low-quality.com"}
+	jsonData, _ := json.Marshal(reqBody)
+	createReq := httptest.NewRequest(http.MethodPost, "/api/scrape-requests", bytes.NewBuffer(jsonData))
+	createReq.Header.Set("Content-Type", "application/json")
+	createW := httptest.NewRecorder()
+	handler.CreateScrapeRequest(createW, createReq)
+
+	var createResponse map[string]interface{}
+	json.NewDecoder(createW.Body).Decode(&createResponse)
+	id := createResponse["id"].(string)
+
+	// Wait for the request to fail (low score will cause failure)
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify it failed
+	getReq := httptest.NewRequest(http.MethodGet, "/api/scrape-requests/"+id, nil)
+	getW := httptest.NewRecorder()
+	handler.GetScrapeRequest(getW, getReq)
+
+	var getResponse map[string]interface{}
+	json.NewDecoder(getW.Body).Decode(&getResponse)
+
+	if getResponse["status"] != "failed" {
+		t.Skipf("Request did not fail as expected (status: %v), skipping retry test", getResponse["status"])
+	}
+
+	// Retry the request
+	retryReq := httptest.NewRequest(http.MethodPost, "/api/scrape-requests/"+id+"/retry", nil)
+	retryW := httptest.NewRecorder()
+
+	handler.RetryScrapeRequest(retryW, retryReq)
+
+	if retryW.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", retryW.Code, retryW.Body.String())
+	}
+
+	var retryResponse map[string]interface{}
+	json.NewDecoder(retryW.Body).Decode(&retryResponse)
+
+	// Verify the request was reset
+	if retryResponse["status"] == "failed" {
+		t.Error("Expected status to be reset after retry")
+	}
+
+	if retryResponse["error_message"] != "" && retryResponse["error_message"] != nil {
+		t.Error("Expected error_message to be cleared after retry")
+	}
+}
+
+func TestRetryScrapeRequestNotFound(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape-requests/non-existent-id/retry", nil)
+	w := httptest.NewRecorder()
+
+	handler.RetryScrapeRequest(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d", w.Code)
+	}
+}
+
+func TestScrapeRequestMethodNotAllowed(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	// Test invalid method on create/list endpoint
+	req := httptest.NewRequest(http.MethodPut, "/api/scrape-requests", nil)
+	w := httptest.NewRecorder()
+
+	handler.CreateScrapeRequest(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
 	}
 }

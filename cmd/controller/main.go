@@ -64,9 +64,35 @@ func main() {
 	mux.HandleFunc("/api/search", handler.SearchTags)
 	mux.HandleFunc("/api/images/search", handler.SearchImageTags)
 	mux.HandleFunc("/api/extract-links", handler.ExtractLinks)
-	mux.HandleFunc("/api/scrape/batch", handler.BatchScrape)
 	mux.HandleFunc("/api/requests/", handler.GetRequest)
 	mux.HandleFunc("/api/requests", handler.ListRequests)
+
+	// Async scrape request routes
+	mux.HandleFunc("/api/scrape-requests", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handler.CreateScrapeRequest(w, r)
+		} else if r.Method == http.MethodGet {
+			handler.ListScrapeRequests(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/api/scrape-requests/", func(w http.ResponseWriter, r *http.Request) {
+		// Handle /api/scrape-requests/{id}/retry
+		if len(r.URL.Path) > len("/api/scrape-requests/") && r.URL.Path[len(r.URL.Path)-6:] == "/retry" {
+			handler.RetryScrapeRequest(w, r)
+			return
+		}
+
+		// Handle /api/scrape-requests/{id}
+		if r.Method == http.MethodGet {
+			handler.GetScrapeRequest(w, r)
+		} else if r.Method == http.MethodDelete {
+			handler.DeleteScrapeRequest(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 
 	// Setup server with CORS middleware
 	addr := fmt.Sprintf(":%d", cfg.Port)
