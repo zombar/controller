@@ -87,3 +87,28 @@ func (c *TextAnalyzerClient) Analyze(text string) (*TextAnalyzerResponse, error)
 
 	return &analyzerResp, nil
 }
+
+// DeleteAnalysis deletes an analysis by ID
+func (c *TextAnalyzerClient) DeleteAnalysis(analysisID string) error {
+	req, err := http.NewRequest(
+		http.MethodDelete,
+		fmt.Sprintf("%s/api/analyses/%s", c.baseURL, analysisID),
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request to text analyzer: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("text analyzer service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}

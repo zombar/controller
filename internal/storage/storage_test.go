@@ -257,3 +257,151 @@ func TestGetRequestNotFound(t *testing.T) {
 		t.Errorf("Expected 'request not found' error, got: %v", err)
 	}
 }
+
+func TestUpdateRequestMetadata(t *testing.T) {
+	dbPath := "test_update_metadata.db"
+	defer os.Remove(dbPath)
+
+	store, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	// Create a request
+	req := &Request{
+		ID:               "test-update-1",
+		CreatedAt:        time.Now().UTC(),
+		SourceType:       "text",
+		TextAnalyzerUUID: "analyzer-1",
+		Tags:             []string{"tag1"},
+		Metadata: map[string]interface{}{
+			"initial_key": "initial_value",
+		},
+	}
+
+	if err := store.SaveRequest(req); err != nil {
+		t.Fatalf("Failed to save request: %v", err)
+	}
+
+	// Update metadata
+	newMetadata := map[string]interface{}{
+		"initial_key":  "updated_value",
+		"new_key":      "new_value",
+		"tombstone_datetime": "2025-10-19T12:34:56.789Z",
+	}
+
+	if err := store.UpdateRequestMetadata("test-update-1", newMetadata); err != nil {
+		t.Fatalf("Failed to update metadata: %v", err)
+	}
+
+	// Retrieve and verify
+	retrieved, err := store.GetRequest("test-update-1")
+	if err != nil {
+		t.Fatalf("Failed to get request: %v", err)
+	}
+
+	if retrieved.Metadata["initial_key"] != "updated_value" {
+		t.Errorf("Expected updated_value, got %v", retrieved.Metadata["initial_key"])
+	}
+	if retrieved.Metadata["new_key"] != "new_value" {
+		t.Errorf("Expected new_value, got %v", retrieved.Metadata["new_key"])
+	}
+	if retrieved.Metadata["tombstone_datetime"] != "2025-10-19T12:34:56.789Z" {
+		t.Errorf("Expected tombstone_datetime, got %v", retrieved.Metadata["tombstone_datetime"])
+	}
+}
+
+func TestUpdateRequestMetadataNotFound(t *testing.T) {
+	dbPath := "test_update_metadata_notfound.db"
+	defer os.Remove(dbPath)
+
+	store, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	err = store.UpdateRequestMetadata("non-existent-id", map[string]interface{}{
+		"key": "value",
+	})
+
+	if err == nil {
+		t.Error("Expected error for non-existent request")
+	}
+	if err.Error() != "request not found" {
+		t.Errorf("Expected 'request not found' error, got: %v", err)
+	}
+}
+
+func TestDeleteRequest(t *testing.T) {
+	dbPath := "test_delete_request.db"
+	defer os.Remove(dbPath)
+
+	store, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	// Create a request with tags
+	req := &Request{
+		ID:               "test-delete-1",
+		CreatedAt:        time.Now().UTC(),
+		SourceType:       "text",
+		TextAnalyzerUUID: "analyzer-1",
+		Tags:             []string{"tag1", "tag2", "tag3"},
+	}
+
+	if err := store.SaveRequest(req); err != nil {
+		t.Fatalf("Failed to save request: %v", err)
+	}
+
+	// Verify request exists
+	_, err = store.GetRequest("test-delete-1")
+	if err != nil {
+		t.Fatalf("Request should exist before deletion: %v", err)
+	}
+
+	// Delete the request
+	if err := store.DeleteRequest("test-delete-1"); err != nil {
+		t.Fatalf("Failed to delete request: %v", err)
+	}
+
+	// Verify request no longer exists
+	_, err = store.GetRequest("test-delete-1")
+	if err == nil {
+		t.Error("Expected error after deletion")
+	}
+	if err.Error() != "request not found" {
+		t.Errorf("Expected 'request not found' error, got: %v", err)
+	}
+
+	// Verify tags were also deleted (cascade)
+	results, err := store.SearchByTags([]string{"tag1"}, false)
+	if err != nil {
+		t.Fatalf("Failed to search tags: %v", err)
+	}
+	if len(results) != 0 {
+		t.Errorf("Expected 0 results after deletion, got %d", len(results))
+	}
+}
+
+func TestDeleteRequestNotFound(t *testing.T) {
+	dbPath := "test_delete_notfound.db"
+	defer os.Remove(dbPath)
+
+	store, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	err = store.DeleteRequest("non-existent-id")
+	if err == nil {
+		t.Error("Expected error for non-existent request")
+	}
+	if err.Error() != "request not found" {
+		t.Errorf("Expected 'request not found' error, got: %v", err)
+	}
+}

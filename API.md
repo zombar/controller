@@ -858,6 +858,233 @@ curl "http://localhost:8080/requests?limit=10&offset=20"
 
 ---
 
+### Delete Request
+
+Permanently delete a request and all associated data from the controller, scraper, and textanalyzer services.
+
+**Request:**
+```http
+DELETE /api/requests/{id}
+```
+
+**Parameters:**
+- `id` (string, required) - Request UUID
+
+**Response:**
+```json
+{
+  "message": "Request deleted successfully"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "error": "Request not found"
+}
+```
+
+**Example:**
+```bash
+curl -X DELETE http://localhost:8080/api/requests/550e8400-e29b-41d4-a716-446655440000
+```
+
+**Notes:**
+- Deletes the request from the controller database
+- Deletes associated scraper data if `scraper_uuid` exists
+- Deletes associated textanalyzer data
+- This operation is permanent and cannot be undone
+- Failures in upstream service deletions are logged but don't stop the local deletion
+
+---
+
+### Tombstone Request
+
+Mark a request as scheduled for deletion by adding `tombstone_datetime` to its metadata. This is a soft delete that can be undone.
+
+**Request:**
+```http
+PUT /api/requests/{id}/tombstone
+```
+
+**Parameters:**
+- `id` (string, required) - Request UUID
+
+**Response:**
+```json
+{
+  "message": "Request tombstoned successfully",
+  "tombstone_datetime": "2025-10-19T12:34:56.789Z"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "error": "Request not found"
+}
+```
+
+**Example:**
+```bash
+curl -X PUT http://localhost:8080/api/requests/550e8400-e29b-41d4-a716-446655440000/tombstone
+```
+
+**Notes:**
+- Adds `tombstone_datetime` field to request metadata
+- Request remains in database and can be retrieved
+- Can be undone using the untombstone endpoint
+- UI applications should display tombstoned items with visual indicators
+
+---
+
+### Untombstone Request
+
+Remove tombstone status from a request by deleting the `tombstone_datetime` field from its metadata.
+
+**Request:**
+```http
+DELETE /api/requests/{id}/tombstone
+```
+
+**Parameters:**
+- `id` (string, required) - Request UUID
+
+**Response:**
+```json
+{
+  "message": "Request untombstoned successfully"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "error": "Request not found"
+}
+```
+
+**Example:**
+```bash
+curl -X DELETE http://localhost:8080/api/requests/550e8400-e29b-41d4-a716-446655440000/tombstone
+```
+
+**Use Case:** Restore a request that was marked for deletion. The request returns to normal status.
+
+---
+
+### Delete Image
+
+Permanently delete an image from the scraper service.
+
+**Request:**
+```http
+DELETE /api/images/{id}
+```
+
+**Parameters:**
+- `id` (string, required) - Image UUID
+
+**Response:**
+```json
+{
+  "message": "Image deleted successfully"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "error": "Image not found"
+}
+```
+
+**Example:**
+```bash
+curl -X DELETE http://localhost:8080/api/images/550e8400-e29b-41d4-a716-446655440000
+```
+
+**Notes:**
+- Deletes the image from the scraper database
+- This operation is permanent and cannot be undone
+- Image must exist in the scraper service
+
+---
+
+### Tombstone Image
+
+Mark an image as scheduled for deletion by adding `tombstone_datetime` to its record. This is a soft delete that can be undone.
+
+**Request:**
+```http
+PUT /api/images/{id}/tombstone
+```
+
+**Parameters:**
+- `id` (string, required) - Image UUID
+
+**Response:**
+```json
+{
+  "message": "Image tombstoned successfully"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "error": "Image not found"
+}
+```
+
+**Example:**
+```bash
+curl -X PUT http://localhost:8080/api/images/550e8400-e29b-41d4-a716-446655440000/tombstone
+```
+
+**Notes:**
+- Adds `tombstone_datetime` field to image record in scraper database
+- Image remains in database and can be retrieved
+- Can be undone using the untombstone endpoint
+- Image will include `tombstone_datetime` in API responses
+
+---
+
+### Untombstone Image
+
+Remove tombstone status from an image by deleting the `tombstone_datetime` field.
+
+**Request:**
+```http
+DELETE /api/images/{id}/tombstone
+```
+
+**Parameters:**
+- `id` (string, required) - Image UUID
+
+**Response:**
+```json
+{
+  "message": "Image untombstoned successfully"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "error": "Image not found"
+}
+```
+
+**Example:**
+```bash
+curl -X DELETE http://localhost:8080/api/images/550e8400-e29b-41d4-a716-446655440000/tombstone
+```
+
+**Use Case:** Restore an image that was marked for deletion. The image returns to normal status.
+
+---
+
 ## Data Types
 
 ### Request

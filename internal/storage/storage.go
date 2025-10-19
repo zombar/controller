@@ -152,6 +152,70 @@ func (s *Storage) GetRequest(id string) (*Request, error) {
 	return &req, nil
 }
 
+// DeleteRequest deletes a request and all associated tags
+func (s *Storage) DeleteRequest(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete associated tags first (due to foreign key constraint)
+	_, err = tx.Exec("DELETE FROM tags WHERE request_id = ?", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete tags: %w", err)
+	}
+
+	// Delete the request
+	result, err := tx.Exec("DELETE FROM requests WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete request: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("request not found")
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateRequestMetadata updates the metadata field of a request
+func (s *Storage) UpdateRequestMetadata(id string, metadata map[string]interface{}) error {
+	metadataJSON, err := json.Marshal(metadata)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+
+	result, err := s.db.Exec(`
+		UPDATE requests
+		SET metadata_json = ?
+		WHERE id = ?
+	`, string(metadataJSON), id)
+	if err != nil {
+		return fmt.Errorf("failed to update request metadata: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("request not found")
+	}
+
+	return nil
+}
+
 // SearchByTags searches for requests by tags with fuzzy matching
 func (s *Storage) SearchByTags(searchTags []string, fuzzy bool) ([]string, error) {
 	if len(searchTags) == 0 {
