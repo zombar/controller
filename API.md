@@ -379,6 +379,67 @@ curl -X POST http://localhost:8080/api/images/search \
 
 ---
 
+### Get Document Images
+
+Retrieve all images associated with a specific document using its scraper UUID.
+
+**Request:**
+```http
+GET /api/documents/{scraper_uuid}/images
+```
+
+**Parameters:**
+- `scraper_uuid` (string, required) - Scraper UUID from document metadata
+
+**Response:**
+```json
+{
+  "images": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "url": "https://example.com/article-image.jpg",
+      "alt_text": "Article header image",
+      "summary": "Image shows a diagram explaining the concept...",
+      "tags": ["diagram", "technical", "illustration"],
+      "base64_data": "iVBORw0KGgoAAAANSUhEUgAAAAEA..."
+    },
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440001",
+      "url": "https://example.com/chart.png",
+      "alt_text": "Performance chart",
+      "summary": "Graph depicting performance metrics...",
+      "tags": ["chart", "data", "visualization"],
+      "base64_data": "iVBORw0KGgoAAAANSUhEUgAAAAEA..."
+    }
+  ],
+  "count": 2
+}
+```
+
+**Empty Response:**
+```json
+{
+  "images": [],
+  "count": 0
+}
+```
+
+**Error Response (400):**
+```json
+{
+  "error": "Scraper UUID is required"
+}
+```
+
+**Example:**
+```bash
+curl http://localhost:8080/api/documents/abc123-scraper-uuid/images
+```
+
+**Use Case:** Retrieve images that were scraped alongside a document. Use the `scraper_uuid` field from a document's metadata to fetch its associated images.
+
+---
+
 ### Extract Links
 
 Extract and filter links from a URL using AI-powered content analysis. This endpoint identifies substantive links (articles, blog posts, research papers) while filtering out navigation, social media buttons, ads, and spam.

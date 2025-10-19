@@ -211,3 +211,188 @@ func TestScraperClient_ExtractLinks(t *testing.T) {
 	}
 }
 
+func TestScraperClient_SearchImagesByTags(t *testing.T) {
+	tests := []struct {
+		name           string
+		tags           []string
+		mockResponse   ImageSearchResponse
+		mockStatusCode int
+		expectError    bool
+	}{
+		{
+			name: "successful search",
+			tags: []string{"test", "image"},
+			mockResponse: ImageSearchResponse{
+				Images: []*ImageInfo{
+					{
+						ID:      "img-1",
+						URL:     "https://example.com/image1.jpg",
+						AltText: "Test Image 1",
+						Summary: "A test image",
+						Tags:    []string{"test", "image"},
+					},
+					{
+						ID:      "img-2",
+						URL:     "https://example.com/image2.jpg",
+						AltText: "Test Image 2",
+						Tags:    []string{"test"},
+					},
+				},
+				Count: 2,
+			},
+			mockStatusCode: http.StatusOK,
+			expectError:    false,
+		},
+		{
+			name: "empty results",
+			tags: []string{"nonexistent"},
+			mockResponse: ImageSearchResponse{
+				Images: []*ImageInfo{},
+				Count:  0,
+			},
+			mockStatusCode: http.StatusOK,
+			expectError:    false,
+		},
+		{
+			name:           "server error",
+			tags:           []string{"error"},
+			mockStatusCode: http.StatusInternalServerError,
+			expectError:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/images/search" {
+					t.Errorf("Expected path /api/images/search, got %s", r.URL.Path)
+				}
+				if r.Method != http.MethodPost {
+					t.Errorf("Expected POST method, got %s", r.Method)
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.mockStatusCode)
+				if tt.mockStatusCode == http.StatusOK {
+					json.NewEncoder(w).Encode(tt.mockResponse)
+				} else {
+					json.NewEncoder(w).Encode(map[string]string{"error": "mock error"})
+				}
+			}))
+			defer server.Close()
+
+			client := NewScraperClient(server.URL)
+			result, err := client.SearchImagesByTags(tt.tags)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if result == nil {
+					t.Fatal("Expected result but got nil")
+				}
+				if result.Count != tt.mockResponse.Count {
+					t.Errorf("Expected Count %d, got %d", tt.mockResponse.Count, result.Count)
+				}
+				if len(result.Images) != len(tt.mockResponse.Images) {
+					t.Errorf("Expected %d images, got %d", len(tt.mockResponse.Images), len(result.Images))
+				}
+			}
+		})
+	}
+}
+
+func TestScraperClient_GetImagesByScrapeID(t *testing.T) {
+	tests := []struct {
+		name           string
+		scrapeID       string
+		mockResponse   ImageSearchResponse
+		mockStatusCode int
+		expectError    bool
+	}{
+		{
+			name:     "successful retrieval",
+			scrapeID: "scrape-123",
+			mockResponse: ImageSearchResponse{
+				Images: []*ImageInfo{
+					{
+						ID:      "img-1",
+						URL:     "https://example.com/image1.jpg",
+						AltText: "Image from scrape",
+						Summary: "A scraped image",
+						Tags:    []string{"scraped"},
+					},
+				},
+				Count: 1,
+			},
+			mockStatusCode: http.StatusOK,
+			expectError:    false,
+		},
+		{
+			name:     "no images found",
+			scrapeID: "scrape-empty",
+			mockResponse: ImageSearchResponse{
+				Images: []*ImageInfo{},
+				Count:  0,
+			},
+			mockStatusCode: http.StatusOK,
+			expectError:    false,
+		},
+		{
+			name:           "server error",
+			scrapeID:       "scrape-error",
+			mockStatusCode: http.StatusInternalServerError,
+			expectError:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				expectedPath := "/api/scrapes/" + tt.scrapeID + "/images"
+				if r.URL.Path != expectedPath {
+					t.Errorf("Expected path %s, got %s", expectedPath, r.URL.Path)
+				}
+				if r.Method != http.MethodGet {
+					t.Errorf("Expected GET method, got %s", r.Method)
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.mockStatusCode)
+				if tt.mockStatusCode == http.StatusOK {
+					json.NewEncoder(w).Encode(tt.mockResponse)
+				} else {
+					json.NewEncoder(w).Encode(map[string]string{"error": "mock error"})
+				}
+			}))
+			defer server.Close()
+
+			client := NewScraperClient(server.URL)
+			result, err := client.GetImagesByScrapeID(tt.scrapeID)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if result == nil {
+					t.Fatal("Expected result but got nil")
+				}
+				if result.Count != tt.mockResponse.Count {
+					t.Errorf("Expected Count %d, got %d", tt.mockResponse.Count, result.Count)
+				}
+				if len(result.Images) != len(tt.mockResponse.Images) {
+					t.Errorf("Expected %d images, got %d", len(tt.mockResponse.Images), len(result.Images))
+				}
+			}
+		})
+	}
+}
+

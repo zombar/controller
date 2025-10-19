@@ -66,6 +66,7 @@ func main() {
 	mux.HandleFunc("/api/extract-links", handler.ExtractLinks)
 	mux.HandleFunc("/api/requests/", handler.GetRequest)
 	mux.HandleFunc("/api/requests", handler.ListRequests)
+	mux.HandleFunc("/api/documents/", handler.GetDocumentImages) // Handles /api/documents/{scraper_uuid}/images
 
 	// Async scrape request routes
 	mux.HandleFunc("/api/scrape-requests", func(w http.ResponseWriter, r *http.Request) {
