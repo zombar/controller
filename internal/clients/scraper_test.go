@@ -132,3 +132,184 @@ func TestScraperClient_NetworkError(t *testing.T) {
 		t.Error("Expected network error but got none")
 	}
 }
+
+func TestScraperClient_ExtractLinks(t *testing.T) {
+	tests := []struct {
+		name           string
+		url            string
+		mockResponse   ExtractLinksResponse
+		mockStatusCode int
+		expectError    bool
+	}{
+		{
+			name: "successful extraction",
+			url:  "https://example.com",
+			mockResponse: ExtractLinksResponse{
+				URL: "https://example.com",
+				Links: []string{
+					"https://example.com/article-1",
+					"https://example.com/article-2",
+				},
+				Count: 2,
+			},
+			mockStatusCode: http.StatusOK,
+			expectError:    false,
+		},
+		{
+			name:           "server error",
+			url:            "https://example.com/error",
+			mockStatusCode: http.StatusInternalServerError,
+			expectError:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/extract-links" {
+					t.Errorf("Expected path /api/extract-links, got %s", r.URL.Path)
+				}
+				if r.Method != http.MethodPost {
+					t.Errorf("Expected POST method, got %s", r.Method)
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.mockStatusCode)
+				if tt.mockStatusCode == http.StatusOK {
+					json.NewEncoder(w).Encode(tt.mockResponse)
+				} else {
+					json.NewEncoder(w).Encode(map[string]string{"error": "mock error"})
+				}
+			}))
+			defer server.Close()
+
+			client := NewScraperClient(server.URL)
+			result, err := client.ExtractLinks(tt.url)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if result == nil {
+					t.Fatal("Expected result but got nil")
+				}
+				if result.URL != tt.mockResponse.URL {
+					t.Errorf("Expected URL %s, got %s", tt.mockResponse.URL, result.URL)
+				}
+				if result.Count != tt.mockResponse.Count {
+					t.Errorf("Expected Count %d, got %d", tt.mockResponse.Count, result.Count)
+				}
+				if len(result.Links) != len(tt.mockResponse.Links) {
+					t.Errorf("Expected %d links, got %d", len(tt.mockResponse.Links), len(result.Links))
+				}
+			}
+		})
+	}
+}
+
+func TestScraperClient_BatchScrape(t *testing.T) {
+	tests := []struct {
+		name           string
+		urls           []string
+		force          bool
+		mockResponse   BatchScrapeResponse
+		mockStatusCode int
+		expectError    bool
+	}{
+		{
+			name:  "successful batch scrape",
+			urls:  []string{"https://example.com", "https://example.org"},
+			force: false,
+			mockResponse: BatchScrapeResponse{
+				Results: []BatchResult{
+					{
+						URL:     "https://example.com",
+						Success: true,
+						Cached:  true,
+					},
+					{
+						URL:     "https://example.org",
+						Success: true,
+						Cached:  false,
+					},
+				},
+				Summary: BatchSummary{
+					Total:   2,
+					Success: 2,
+					Failed:  0,
+					Cached:  1,
+					Scraped: 1,
+				},
+			},
+			mockStatusCode: http.StatusOK,
+			expectError:    false,
+		},
+		{
+			name:           "server error",
+			urls:           []string{"https://example.com"},
+			force:          false,
+			mockStatusCode: http.StatusInternalServerError,
+			expectError:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/scrape/batch" {
+					t.Errorf("Expected path /api/scrape/batch, got %s", r.URL.Path)
+				}
+				if r.Method != http.MethodPost {
+					t.Errorf("Expected POST method, got %s", r.Method)
+				}
+
+				// Verify request body
+				var req BatchScrapeRequest
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Errorf("Failed to decode request: %v", err)
+				}
+				if req.Force != tt.force {
+					t.Errorf("Expected Force %v, got %v", tt.force, req.Force)
+				}
+
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.mockStatusCode)
+				if tt.mockStatusCode == http.StatusOK {
+					json.NewEncoder(w).Encode(tt.mockResponse)
+				} else {
+					json.NewEncoder(w).Encode(map[string]string{"error": "mock error"})
+				}
+			}))
+			defer server.Close()
+
+			client := NewScraperClient(server.URL)
+			result, err := client.BatchScrape(tt.urls, tt.force)
+
+			if tt.expectError {
+				if err == nil {
+					t.Error("Expected error but got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("Unexpected error: %v", err)
+				}
+				if result == nil {
+					t.Fatal("Expected result but got nil")
+				}
+				if result.Summary.Total != tt.mockResponse.Summary.Total {
+					t.Errorf("Expected Total %d, got %d", tt.mockResponse.Summary.Total, result.Summary.Total)
+				}
+				if result.Summary.Success != tt.mockResponse.Summary.Success {
+					t.Errorf("Expected Success %d, got %d", tt.mockResponse.Summary.Success, result.Summary.Success)
+				}
+				if len(result.Results) != len(tt.mockResponse.Results) {
+					t.Errorf("Expected %d results, got %d", len(tt.mockResponse.Results), len(result.Results))
+				}
+			}
+		})
+	}
+}

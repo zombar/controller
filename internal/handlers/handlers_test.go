@@ -64,6 +64,78 @@ func mockScraperServer() *httptest.Server {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(response)
 
+		case "/api/extract-links":
+			var req clients.ExtractLinksRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			response := clients.ExtractLinksResponse{
+				URL: req.URL,
+				Links: []string{
+					"https://example.com/article-1",
+					"https://example.com/article-2",
+					"https://example.com/blog/post-1",
+				},
+				Count: 3,
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(response)
+
+		case "/api/scrape/batch":
+			var req clients.BatchScrapeRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			results := []clients.BatchResult{}
+			successCount := 0
+			cachedCount := 0
+
+			for _, url := range req.URLs {
+				if url == "https://invalid-url.com" {
+					results = append(results, clients.BatchResult{
+						URL:     url,
+						Success: false,
+						Error:   "failed to fetch page",
+						Cached:  false,
+					})
+				} else {
+					cached := !req.Force && url == "https://cached.com"
+					if cached {
+						cachedCount++
+					}
+					results = append(results, clients.BatchResult{
+						URL:     url,
+						Success: true,
+						Data: &clients.ScrapedData{
+							ID:      "batch-test-uuid-" + url,
+							URL:     url,
+							Title:   "Test Page",
+							Content: "Test content",
+							Cached:  cached,
+						},
+						Cached: cached,
+					})
+					successCount++
+				}
+			}
+
+			response := clients.BatchScrapeResponse{
+				Results: results,
+				Summary: clients.BatchSummary{
+					Total:   len(req.URLs),
+					Success: successCount,
+					Failed:  len(req.URLs) - successCount,
+					Cached:  cachedCount,
+					Scraped: successCount - cachedCount,
+				},
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(response)
+
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -577,5 +649,217 @@ func TestScrapeURLWithHighScore(t *testing.T) {
 
 	if _, ok := metadata["analyzer_metadata"]; !ok {
 		t.Error("Expected analyzer_metadata in response")
+	}
+}
+
+func TestExtractLinks(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	reqBody := ExtractLinksRequest{
+		URL: "https://example.com",
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/extract-links", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ExtractLinks(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if response["url"] != "https://example.com" {
+		t.Errorf("Expected URL 'https://example.com', got '%v'", response["url"])
+	}
+
+	links := response["links"].([]interface{})
+	if len(links) != 3 {
+		t.Errorf("Expected 3 links, got %d", len(links))
+	}
+
+	if response["count"].(float64) != 3 {
+		t.Errorf("Expected count 3, got %v", response["count"])
+	}
+}
+
+func TestExtractLinksInvalidMethod(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/extract-links", nil)
+	w := httptest.NewRecorder()
+
+	handler.ExtractLinks(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
+
+func TestExtractLinksEmptyURL(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	reqBody := ExtractLinksRequest{URL: ""}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/extract-links", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ExtractLinks(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
+	}
+}
+
+func TestBatchScrape(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	reqBody := BatchScrapeRequest{
+		URLs:  []string{"https://example.com", "https://example.org"},
+		Force: false,
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape/batch", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.BatchScrape(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	results := response["results"].([]interface{})
+	if len(results) != 2 {
+		t.Errorf("Expected 2 results, got %d", len(results))
+	}
+
+	summary := response["summary"].(map[string]interface{})
+	if summary["total"].(float64) != 2 {
+		t.Errorf("Expected total 2, got %v", summary["total"])
+	}
+
+	if summary["success"].(float64) != 2 {
+		t.Errorf("Expected success 2, got %v", summary["success"])
+	}
+}
+
+func TestBatchScrapeWithFailures(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	reqBody := BatchScrapeRequest{
+		URLs:  []string{"https://example.com", "https://invalid-url.com"},
+		Force: false,
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape/batch", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.BatchScrape(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	summary := response["summary"].(map[string]interface{})
+	if summary["success"].(float64) != 1 {
+		t.Errorf("Expected success 1, got %v", summary["success"])
+	}
+
+	if summary["failed"].(float64) != 1 {
+		t.Errorf("Expected failed 1, got %v", summary["failed"])
+	}
+}
+
+func TestBatchScrapeWithCache(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	reqBody := BatchScrapeRequest{
+		URLs:  []string{"https://cached.com", "https://example.com"},
+		Force: false,
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape/batch", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.BatchScrape(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	summary := response["summary"].(map[string]interface{})
+	if summary["cached"].(float64) != 1 {
+		t.Errorf("Expected cached 1, got %v", summary["cached"])
+	}
+
+	if summary["scraped"].(float64) != 1 {
+		t.Errorf("Expected scraped 1, got %v", summary["scraped"])
+	}
+}
+
+func TestBatchScrapeInvalidMethod(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/scrape/batch", nil)
+	w := httptest.NewRecorder()
+
+	handler.BatchScrape(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
+
+func TestBatchScrapeEmptyURLs(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	reqBody := BatchScrapeRequest{URLs: []string{}}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape/batch", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.BatchScrape(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status 400, got %d", w.Code)
 	}
 }

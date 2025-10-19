@@ -7,7 +7,11 @@ A central orchestration service that coordinates the scraper and textanalyzer mi
 - Orchestrates scraper and textanalyzer services
 - Unified API for URL scraping with automatic text analysis
 - Direct text analysis without scraping
+- AI-powered link extraction and filtering
+- Batch URL scraping with caching support
+- Link quality scoring to filter low-quality content
 - Tag-based search with fuzzy matching support
+- Image search across scraped content
 - SQLite storage with audit trails
 - UUID tracking for all service calls
 - Designed for PostgreSQL migration
@@ -78,6 +82,26 @@ curl -X POST http://localhost:8080/analyze \
 curl -X POST http://localhost:8080/search/tags \
   -H "Content-Type: application/json" \
   -d '{"tags": ["programming", "web"], "fuzzy": false}'
+
+# Score a link for quality
+curl -X POST http://localhost:8080/api/score \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article"}'
+
+# Extract links from a URL
+curl -X POST http://localhost:8080/api/extract-links \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com"}'
+
+# Batch scrape multiple URLs
+curl -X POST http://localhost:8080/api/scrape/batch \
+  -H "Content-Type: application/json" \
+  -d '{"urls": ["https://example.com/article-1", "https://example.com/article-2"], "force": false}'
+
+# Search images by tags
+curl -X POST http://localhost:8080/api/images/search \
+  -H "Content-Type: application/json" \
+  -d '{"tags": ["cat", "animal"]}'
 
 # Get request by ID
 curl http://localhost:8080/requests/550e8400-e29b-41d4-a716-446655440000

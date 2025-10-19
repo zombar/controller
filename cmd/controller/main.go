@@ -14,6 +14,26 @@ import (
 	"github.com/zombar/controller/internal/storage"
 )
 
+// corsMiddleware adds CORS headers to allow web UI access
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Set CORS headers
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		w.Header().Set("Access-Control-Max-Age", "3600")
+
+		// Handle preflight OPTIONS request
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// Call the next handler
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	// Load configuration
 	cfg, err := config.Load()
@@ -43,14 +63,16 @@ func main() {
 	mux.HandleFunc("/api/score", handler.ScoreLink)
 	mux.HandleFunc("/api/search", handler.SearchTags)
 	mux.HandleFunc("/api/images/search", handler.SearchImageTags)
+	mux.HandleFunc("/api/extract-links", handler.ExtractLinks)
+	mux.HandleFunc("/api/scrape/batch", handler.BatchScrape)
 	mux.HandleFunc("/api/requests/", handler.GetRequest)
 	mux.HandleFunc("/api/requests", handler.ListRequests)
 
-	// Setup server
+	// Setup server with CORS middleware
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	server := &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: corsMiddleware(mux),
 	}
 
 	// Setup graceful shutdown

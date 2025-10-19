@@ -187,3 +187,139 @@ func (c *ScraperClient) ScoreLink(url string) (*ScoreResponse, error) {
 
 	return &scoreResp, nil
 }
+
+// ExtractLinksRequest represents a request to extract links from a URL
+type ExtractLinksRequest struct {
+	URL string `json:"url"`
+}
+
+// ExtractLinksResponse represents the response from extracting links
+type ExtractLinksResponse struct {
+	URL   string   `json:"url"`
+	Links []string `json:"links"`
+	Count int      `json:"count"`
+}
+
+// ExtractLinks extracts links from a URL using the scraper service
+func (c *ScraperClient) ExtractLinks(url string) (*ExtractLinksResponse, error) {
+	reqBody := ExtractLinksRequest{URL: url}
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post(
+		fmt.Sprintf("%s/api/extract-links", c.baseURL),
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request to scraper: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("scraper service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var extractResp ExtractLinksResponse
+	if err := json.Unmarshal(body, &extractResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &extractResp, nil
+}
+
+// BatchScrapeRequest represents a request to scrape multiple URLs
+type BatchScrapeRequest struct {
+	URLs  []string `json:"urls"`
+	Force bool     `json:"force"`
+}
+
+// PageMetadata represents metadata about a scraped page
+type PageMetadata struct {
+	Description   string   `json:"description,omitempty"`
+	Keywords      []string `json:"keywords,omitempty"`
+	Author        string   `json:"author,omitempty"`
+	PublishedDate string   `json:"published_date,omitempty"`
+}
+
+// ScrapedData represents the complete scraped data for a URL
+type ScrapedData struct {
+	ID             string       `json:"id"`
+	URL            string       `json:"url"`
+	Title          string       `json:"title"`
+	Content        string       `json:"content"`
+	Images         []ImageInfo  `json:"images"`
+	Links          []string     `json:"links"`
+	FetchedAt      time.Time    `json:"fetched_at"`
+	CreatedAt      time.Time    `json:"created_at"`
+	ProcessingTime float64      `json:"processing_time_seconds"`
+	Cached         bool         `json:"cached"`
+	Metadata       PageMetadata `json:"metadata"`
+	Score          *LinkScore   `json:"score,omitempty"`
+}
+
+// BatchResult represents the result of scraping a single URL in a batch
+type BatchResult struct {
+	URL     string       `json:"url"`
+	Success bool         `json:"success"`
+	Data    *ScrapedData `json:"data,omitempty"`
+	Error   string       `json:"error,omitempty"`
+	Cached  bool         `json:"cached"`
+}
+
+// BatchSummary provides summary statistics for a batch scrape operation
+type BatchSummary struct {
+	Total   int `json:"total"`
+	Success int `json:"success"`
+	Failed  int `json:"failed"`
+	Cached  int `json:"cached"`
+	Scraped int `json:"scraped"`
+}
+
+// BatchScrapeResponse represents the response from a batch scrape operation
+type BatchScrapeResponse struct {
+	Results []BatchResult `json:"results"`
+	Summary BatchSummary  `json:"summary"`
+}
+
+// BatchScrape scrapes multiple URLs using the scraper service
+func (c *ScraperClient) BatchScrape(urls []string, force bool) (*BatchScrapeResponse, error) {
+	reqBody := BatchScrapeRequest{URLs: urls, Force: force}
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	resp, err := c.httpClient.Post(
+		fmt.Sprintf("%s/api/scrape/batch", c.baseURL),
+		"application/json",
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request to scraper: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("scraper service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var batchResp BatchScrapeResponse
+	if err := json.Unmarshal(body, &batchResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &batchResp, nil
+}
