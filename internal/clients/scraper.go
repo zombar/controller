@@ -131,6 +131,33 @@ func (c *ScraperClient) SearchImagesByTags(tags []string) (*ImageSearchResponse,
 	return &searchResp, nil
 }
 
+// GetImagesByScrapeID retrieves images associated with a specific scrape ID
+func (c *ScraperClient) GetImagesByScrapeID(scrapeID string) (*ImageSearchResponse, error) {
+	resp, err := c.httpClient.Get(
+		fmt.Sprintf("%s/api/scrapes/%s/images", c.baseURL, scrapeID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request to scraper: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("scraper service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var searchResp ImageSearchResponse
+	if err := json.Unmarshal(body, &searchResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &searchResp, nil
+}
+
 // LinkScore represents a scored link with quality assessment
 type LinkScore struct {
 	URL                 string   `json:"url"`

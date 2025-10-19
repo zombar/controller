@@ -83,8 +83,48 @@ func mockScraperServer() *httptest.Server {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(response)
 
+		case "/api/images/search":
+			var req clients.ImageSearchRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+
+			response := clients.ImageSearchResponse{
+				Images: []*clients.ImageInfo{
+					{
+						ID:      "img-1",
+						URL:     "https://example.com/image1.jpg",
+						AltText: "Test Image 1",
+						Summary: "A test image",
+						Tags:    req.Tags,
+					},
+				},
+				Count: 1,
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(response)
 
 		default:
+			// Handle dynamic routes like /api/scrapes/{id}/images
+			if len(r.URL.Path) > 13 && r.URL.Path[:13] == "/api/scrapes/" && len(r.URL.Path) > 20 && r.URL.Path[len(r.URL.Path)-7:] == "/images" {
+				response := clients.ImageSearchResponse{
+					Images: []*clients.ImageInfo{
+						{
+							ID:      "img-1",
+							URL:     "https://example.com/scrape-image.jpg",
+							AltText: "Scrape Image",
+							Summary: "Image from scrape",
+							Tags:    []string{"scraped"},
+						},
+					},
+					Count: 1,
+				}
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(response)
+				return
+			}
+
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
@@ -1015,5 +1055,88 @@ func TestScrapeRequestMethodNotAllowed(t *testing.T) {
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("Expected status 405, got %d", w.Code)
+	}
+}
+
+func TestGetDocumentImages(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	tests := []struct {
+		name           string
+		method         string
+		path           string
+		wantStatusCode int
+		wantErrMsg     string
+		checkResponse  func(t *testing.T, body []byte)
+	}{
+		{
+			name:           "successful retrieval",
+			method:         http.MethodGet,
+			path:           "/api/documents/scraper-test-uuid/images",
+			wantStatusCode: http.StatusOK,
+			checkResponse: func(t *testing.T, body []byte) {
+				var resp map[string]interface{}
+				if err := json.Unmarshal(body, &resp); err != nil {
+					t.Fatalf("Failed to parse response: %v", err)
+				}
+
+				images, ok := resp["images"].([]interface{})
+				if !ok {
+					t.Fatal("Expected images field to be an array")
+				}
+
+				count, ok := resp["count"].(float64)
+				if !ok {
+					t.Fatal("Expected count field to be a number")
+				}
+
+				if int(count) != len(images) {
+					t.Errorf("Count %d doesn't match images length %d", int(count), len(images))
+				}
+			},
+		},
+		{
+			name:           "missing scraper UUID",
+			method:         http.MethodGet,
+			path:           "/api/documents//images",
+			wantStatusCode: http.StatusBadRequest,
+			wantErrMsg:     "Scraper UUID is required",
+		},
+		{
+			name:           "method not allowed",
+			method:         http.MethodPost,
+			path:           "/api/documents/scraper-test-uuid/images",
+			wantStatusCode: http.StatusMethodNotAllowed,
+			wantErrMsg:     "Method not allowed",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(tt.method, tt.path, nil)
+			w := httptest.NewRecorder()
+
+			handler.GetDocumentImages(w, req)
+
+			if w.Code != tt.wantStatusCode {
+				t.Errorf("Status code = %d, want %d. Body: %s", w.Code, tt.wantStatusCode, w.Body.String())
+			}
+
+			if tt.wantErrMsg != "" {
+				var errResp ErrorResponse
+				if err := json.NewDecoder(w.Body).Decode(&errResp); err != nil {
+					t.Fatalf("Failed to decode error response: %v", err)
+				}
+				if errResp.Error != tt.wantErrMsg {
+					t.Errorf("Error message = %q, want %q", errResp.Error, tt.wantErrMsg)
+				}
+				return
+			}
+
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, w.Body.Bytes())
+			}
+		})
 	}
 }

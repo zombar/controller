@@ -436,6 +436,35 @@ func (h *Handler) SearchImageTags(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, response, http.StatusOK)
 }
 
+// GetDocumentImages retrieves images associated with a document's scraper UUID
+func (h *Handler) GetDocumentImages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract scraper UUID from URL path
+	scrapeID := r.URL.Path[len("/api/documents/"):len(r.URL.Path)-len("/images")]
+	if scrapeID == "" {
+		respondError(w, "Scraper UUID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Call scraper service to get images by scrape ID
+	searchResp, err := h.scraper.GetImagesByScrapeID(scrapeID)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to retrieve images: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"images": searchResp.Images,
+		"count":  searchResp.Count,
+	}
+
+	respondJSON(w, response, http.StatusOK)
+}
+
 // ScoreLinkRequest represents a request to score a link
 type ScoreLinkRequest struct {
 	URL string `json:"url"`
