@@ -523,7 +523,7 @@ type BatchScrapeRequest struct {
 	Force bool     `json:"force"`
 }
 
-// BatchScrape handles scraping multiple URLs
+// BatchScrape handles scraping multiple URLs asynchronously
 func (h *Handler) BatchScrape(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -541,19 +541,25 @@ func (h *Handler) BatchScrape(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Call scraper service to batch scrape
-	batchResp, err := h.scraper.BatchScrape(req.URLs, req.Force)
-	if err != nil {
-		respondError(w, fmt.Sprintf("Failed to batch scrape: %v", err), http.StatusInternalServerError)
-		return
+	// Create scrape requests for each URL
+	requestIDs := []string{}
+	for _, url := range req.URLs {
+		// Create scrape request (will reuse existing if URL is already being scraped)
+		scrapeReq := h.scrapeManager.Create(url)
+		requestIDs = append(requestIDs, scrapeReq.ID)
+
+		// If this is a new request, start processing asynchronously
+		if scrapeReq.Status == scrapemanager.StatusPending {
+			go h.processScrapeRequest(scrapeReq.ID)
+		}
 	}
 
 	response := map[string]interface{}{
-		"results": batchResp.Results,
-		"summary": batchResp.Summary,
+		"request_ids": requestIDs,
+		"count":       len(requestIDs),
 	}
 
-	respondJSON(w, response, http.StatusOK)
+	respondJSON(w, response, http.StatusCreated)
 }
 
 // Health check endpoint
