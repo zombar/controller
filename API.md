@@ -447,156 +447,260 @@ curl -X POST http://localhost:8080/api/extract-links \
 
 ---
 
-### Batch Scrape
+### Create Async Scrape Request
 
-Scrape multiple URLs concurrently with caching support. This endpoint allows efficient batch processing of URLs with automatic database caching to avoid redundant scraping.
+Create an asynchronous scrape request that processes in the background. Returns immediately with a request ID for tracking progress.
 
 **Request:**
 ```http
-POST /api/scrape/batch
+POST /api/scrape-requests
 Content-Type: application/json
 
 {
-  "urls": [
-    "https://example.com/article-1",
-    "https://example.com/article-2",
-    "https://example.org/post"
-  ],
-  "force": false
+  "url": "https://example.com/article"
 }
 ```
 
 **Parameters:**
-- `urls` (array of strings, required) - URLs to scrape (maximum 50 per request)
-- `force` (boolean, optional) - Bypass cache and force re-scrape (default: false)
+- `url` (string, required) - URL to scrape asynchronously
 
 **Response:**
 ```json
 {
-  "results": [
+  "id": "7a8e9f0a-1234-5678-90ab-cdef12345678",
+  "url": "https://example.com/article",
+  "status": "pending",
+  "progress": 0,
+  "created_at": "2025-10-19T12:34:56.789Z",
+  "updated_at": "2025-10-19T12:34:56.789Z",
+  "expires_at": "2025-10-19T12:49:56.789Z"
+}
+```
+
+**Status Values:**
+- `pending` - Request queued, not yet started
+- `processing` - Currently being processed
+- `completed` - Successfully completed, result available
+- `failed` - Processing failed, error message available
+
+**Progress Tracking:**
+- `0` - Pending
+- `10` - Started processing
+- `30` - URL scoring complete
+- `50` - Scraping complete
+- `70` - Text analysis complete
+- `90` - Saving to database
+- `100` - Completed
+
+**Notes:**
+- Returns existing request if URL is already being processed
+- Requests automatically expire and are removed after 15 minutes
+- Background processing includes scoring, scraping, and analysis
+- URLs below quality threshold will fail with error message
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/scrape-requests \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article"}'
+```
+
+---
+
+### List Scrape Requests
+
+Get all active scrape requests sorted by creation time (newest first).
+
+**Request:**
+```http
+GET /api/scrape-requests
+```
+
+**Response:**
+```json
+{
+  "count": 2,
+  "requests": [
     {
+      "id": "7a8e9f0a-1234-5678-90ab-cdef12345678",
       "url": "https://example.com/article-1",
-      "success": true,
-      "cached": true,
-      "data": {
-        "id": "abc123",
-        "url": "https://example.com/article-1",
-        "title": "Example Article",
-        "content": "Article content...",
-        "images": [],
-        "links": [],
-        "fetched_at": "2025-10-17T12:34:56.789Z",
-        "created_at": "2025-10-17T12:34:56.789Z",
-        "processing_time_seconds": 2.5,
-        "cached": true,
-        "metadata": {
-          "description": "Article description",
-          "keywords": ["example", "article"],
-          "author": "John Doe",
-          "published_date": "2025-10-15"
-        }
-      }
+      "status": "completed",
+      "progress": 100,
+      "created_at": "2025-10-19T12:34:56.789Z",
+      "updated_at": "2025-10-19T12:35:12.456Z",
+      "result_request_id": "550e8400-e29b-41d4-a716-446655440000",
+      "expires_at": "2025-10-19T12:49:56.789Z"
     },
     {
+      "id": "8b9f0a1b-2345-6789-01bc-def123456789",
       "url": "https://example.com/article-2",
-      "success": true,
-      "cached": false,
-      "data": {
-        "id": "def456",
-        "url": "https://example.com/article-2",
-        "title": "Another Article",
-        "content": "More content...",
-        "images": [],
-        "links": [],
-        "fetched_at": "2025-10-17T12:35:10.123Z",
-        "created_at": "2025-10-17T12:35:10.123Z",
-        "processing_time_seconds": 3.2,
-        "cached": false,
-        "metadata": {}
-      }
-    },
-    {
-      "url": "https://invalid-url.com",
-      "success": false,
-      "error": "failed to fetch page",
-      "cached": false
+      "status": "processing",
+      "progress": 50,
+      "created_at": "2025-10-19T12:35:00.123Z",
+      "updated_at": "2025-10-19T12:35:08.789Z",
+      "expires_at": "2025-10-19T12:50:00.123Z"
     }
-  ],
-  "summary": {
-    "total": 3,
-    "success": 2,
-    "failed": 1,
-    "cached": 1,
-    "scraped": 1
-  }
-}
-```
-
-**Response Fields:**
-
-**Per-URL Result:**
-- `url` (string) - The URL that was processed
-- `success` (boolean) - Whether the scrape succeeded
-- `cached` (boolean) - Whether the result was served from cache
-- `data` (object, optional) - Scraped data (only present if success=true)
-- `error` (string, optional) - Error message (only present if success=false)
-
-**Summary Statistics:**
-- `total` (integer) - Total number of URLs processed
-- `success` (integer) - Number of successful scrapes
-- `failed` (integer) - Number of failed scrapes
-- `cached` (integer) - Number of cached results
-- `scraped` (integer) - Number of newly scraped URLs
-
-**Caching Behavior:**
-- By default (`force: false`), checks database for existing scraped data
-- Cached results return immediately without re-scraping
-- Set `force: true` to bypass cache and force fresh scrape
-- Failed URLs do not affect successful ones
-
-**Concurrency:** URLs are processed concurrently using goroutines for optimal performance.
-
-**Limitations:**
-- Maximum 50 URLs per request
-- Individual URL timeout: 10 minutes
-- Failed URLs return error details in their result object
-
-**Error Response (400):**
-```json
-{
-  "error": "At least one URL is required"
-}
-```
-
-```json
-{
-  "error": "Maximum 50 URLs allowed per batch request"
+  ]
 }
 ```
 
 **Example:**
 ```bash
-# Batch scrape with caching
-curl -X POST http://localhost:8080/api/scrape/batch \
-  -H "Content-Type: application/json" \
-  -d '{
-    "urls": [
-      "https://example.com/article-1",
-      "https://example.com/article-2"
-    ],
-    "force": false
-  }'
-
-# Force re-scrape (bypass cache)
-curl -X POST http://localhost:8080/api/scrape/batch \
-  -H "Content-Type: application/json" \
-  -d '{
-    "urls": ["https://example.com/article-1"],
-    "force": true
-  }'
+curl http://localhost:8080/api/scrape-requests
 ```
 
-**Use Case:** Use this endpoint to efficiently process multiple URLs discovered from the Extract Links endpoint or from other sources. The caching system ensures you don't waste resources re-scraping content that hasn't changed.
+---
+
+### Get Scrape Request
+
+Get detailed status of a specific scrape request.
+
+**Request:**
+```http
+GET /api/scrape-requests/{id}
+```
+
+**Parameters:**
+- `id` (string, required) - Scrape request UUID
+
+**Response (Processing):**
+```json
+{
+  "id": "7a8e9f0a-1234-5678-90ab-cdef12345678",
+  "url": "https://example.com/article",
+  "status": "processing",
+  "progress": 70,
+  "created_at": "2025-10-19T12:34:56.789Z",
+  "updated_at": "2025-10-19T12:35:10.123Z",
+  "expires_at": "2025-10-19T12:49:56.789Z"
+}
+```
+
+**Response (Completed):**
+```json
+{
+  "id": "7a8e9f0a-1234-5678-90ab-cdef12345678",
+  "url": "https://example.com/article",
+  "status": "completed",
+  "progress": 100,
+  "created_at": "2025-10-19T12:34:56.789Z",
+  "updated_at": "2025-10-19T12:35:12.456Z",
+  "result_request_id": "550e8400-e29b-41d4-a716-446655440000",
+  "expires_at": "2025-10-19T12:49:56.789Z"
+}
+```
+
+**Response (Failed):**
+```json
+{
+  "id": "7a8e9f0a-1234-5678-90ab-cdef12345678",
+  "url": "https://invalid-url.com",
+  "status": "failed",
+  "progress": 30,
+  "created_at": "2025-10-19T12:34:56.789Z",
+  "updated_at": "2025-10-19T12:35:02.123Z",
+  "error_message": "Failed to score link: DNS lookup failed",
+  "expires_at": "2025-10-19T12:49:56.789Z"
+}
+```
+
+**Error Response:**
+```json
+{
+  "error": "Scrape request not found"
+}
+```
+
+**Example:**
+```bash
+curl http://localhost:8080/api/scrape-requests/7a8e9f0a-1234-5678-90ab-cdef12345678
+```
+
+---
+
+### Retry Scrape Request
+
+Retry a failed scrape request. Resets status to pending and starts processing again.
+
+**Request:**
+```http
+POST /api/scrape-requests/{id}/retry
+```
+
+**Parameters:**
+- `id` (string, required) - Scrape request UUID
+
+**Response:**
+```json
+{
+  "id": "7a8e9f0a-1234-5678-90ab-cdef12345678",
+  "url": "https://example.com/article",
+  "status": "pending",
+  "progress": 0,
+  "created_at": "2025-10-19T12:34:56.789Z",
+  "updated_at": "2025-10-19T12:36:00.000Z",
+  "expires_at": "2025-10-19T12:49:56.789Z"
+}
+```
+
+**Error Response (Not Found):**
+```json
+{
+  "error": "Scrape request not found"
+}
+```
+
+**Error Response (Invalid State):**
+```json
+{
+  "error": "Can only retry failed requests"
+}
+```
+
+**Notes:**
+- Only failed requests can be retried
+- Completed, pending, or processing requests will return an error
+- Original creation and expiration times are preserved
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/scrape-requests/7a8e9f0a-1234-5678-90ab-cdef12345678/retry
+```
+
+---
+
+### Delete Scrape Request
+
+Delete a scrape request from tracking. Does not delete the stored result if already completed.
+
+**Request:**
+```http
+DELETE /api/scrape-requests/{id}
+```
+
+**Parameters:**
+- `id` (string, required) - Scrape request UUID
+
+**Response:**
+```json
+{
+  "status": "deleted"
+}
+```
+
+**Error Response:**
+```json
+{
+  "error": "Scrape request not found"
+}
+```
+
+**Example:**
+```bash
+curl -X DELETE http://localhost:8080/api/scrape-requests/7a8e9f0a-1234-5678-90ab-cdef12345678
+```
+
+**Use Case:** Clean up completed or failed requests from the tracking list. Useful for UI implementations to remove requests after user has viewed the result.
 
 ---
 
@@ -798,16 +902,6 @@ async function extractLinks(url: string): Promise<ExtractLinksResponse> {
   });
   return response.json();
 }
-
-// Batch scrape multiple URLs
-async function batchScrape(urls: string[], force = false): Promise<BatchScrapeResponse> {
-  const response = await fetch('http://localhost:8080/api/scrape/batch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ urls, force })
-  });
-  return response.json();
-}
 ```
 
 ### Python
@@ -859,14 +953,6 @@ def extract_links(url: str) -> dict:
         json={'url': url}
     )
     return response.json()
-
-# Batch scrape multiple URLs
-def batch_scrape(urls: list[str], force: bool = False) -> dict:
-    response = requests.post(
-        'http://localhost:8080/api/scrape/batch',
-        json={'urls': urls, 'force': force}
-    )
-    return response.json()
 ```
 
 ### cURL
@@ -905,17 +991,6 @@ curl "http://localhost:8080/requests?limit=10&offset=0"
 curl -X POST http://localhost:8080/api/extract-links \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com"}'
-
-# Batch scrape multiple URLs
-curl -X POST http://localhost:8080/api/scrape/batch \
-  -H "Content-Type: application/json" \
-  -d '{
-    "urls": [
-      "https://example.com/article-1",
-      "https://example.com/article-2"
-    ],
-    "force": false
-  }'
 ```
 
 ---

@@ -3,12 +3,14 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/zombar/controller/internal/clients"
+	"github.com/zombar/controller/internal/scraper_requests"
 	"github.com/zombar/controller/internal/storage"
 )
 
@@ -18,6 +20,7 @@ type Handler struct {
 	scraper            *clients.ScraperClient
 	textAnalyzer       *clients.TextAnalyzerClient
 	linkScoreThreshold float64
+	scrapeRequests     *scraper_requests.Manager
 }
 
 // New creates a new Handler
@@ -27,6 +30,7 @@ func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *c
 		scraper:            scraper,
 		textAnalyzer:       textAnalyzer,
 		linkScoreThreshold: linkScoreThreshold,
+		scrapeRequests:     scraper_requests.NewManager(),
 	}
 }
 
@@ -517,49 +521,195 @@ func (h *Handler) ExtractLinks(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, response, http.StatusOK)
 }
 
-// BatchScrapeRequest represents a request to scrape multiple URLs
-type BatchScrapeRequest struct {
-	URLs  []string `json:"urls"`
-	Force bool     `json:"force"`
-}
-
-// BatchScrape handles scraping multiple URLs asynchronously
-func (h *Handler) BatchScrape(w http.ResponseWriter, r *http.Request) {
+// CreateScrapeRequest creates a new async scrape request
+func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	var req BatchScrapeRequest
+	var req ScrapeURLRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	if len(req.URLs) == 0 {
-		respondError(w, "At least one URL is required", http.StatusBadRequest)
+	if req.URL == "" {
+		respondError(w, "URL is required", http.StatusBadRequest)
 		return
 	}
 
-	// Create scrape requests for each URL
-	requestIDs := []string{}
-	for _, url := range req.URLs {
-		// Create scrape request (will reuse existing if URL is already being scraped)
-		scrapeReq := h.scrapeManager.Create(url)
-		requestIDs = append(requestIDs, scrapeReq.ID)
+	// Create or get existing scrape request
+	scrapeReq, isNew := h.scrapeRequests.Create(req.URL)
 
-		// If this is a new request, start processing asynchronously
-		if scrapeReq.Status == scrapemanager.StatusPending {
-			go h.processScrapeRequest(scrapeReq.ID)
-		}
+	// If new, start background scraping
+	if isNew {
+		go h.processScrapeRequest(scrapeReq.ID, req.URL)
 	}
+
+	respondJSON(w, scrapeReq, http.StatusOK)
+}
+
+// ListScrapeRequests returns all active scrape requests
+func (h *Handler) ListScrapeRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	requests := h.scrapeRequests.List()
 
 	response := map[string]interface{}{
-		"request_ids": requestIDs,
-		"count":       len(requestIDs),
+		"requests": requests,
+		"count":    len(requests),
 	}
 
-	respondJSON(w, response, http.StatusCreated)
+	respondJSON(w, response, http.StatusOK)
+}
+
+// GetScrapeRequest returns a specific scrape request by ID
+func (h *Handler) GetScrapeRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Path[len("/api/scrape-requests/"):]
+	if id == "" {
+		respondError(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	req, ok := h.scrapeRequests.Get(id)
+	if !ok {
+		respondError(w, "Scrape request not found", http.StatusNotFound)
+		return
+	}
+
+	respondJSON(w, req, http.StatusOK)
+}
+
+// RetryScrapeRequest retries a failed scrape request
+func (h *Handler) RetryScrapeRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Path[len("/api/scrape-requests/"):len(r.URL.Path)-len("/retry")]
+	if id == "" {
+		respondError(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	req, ok := h.scrapeRequests.Get(id)
+	if !ok {
+		respondError(w, "Scrape request not found", http.StatusNotFound)
+		return
+	}
+
+	// Only allow retrying failed requests
+	if req.Status != scraper_requests.StatusFailed {
+		respondError(w, "Can only retry failed requests", http.StatusBadRequest)
+		return
+	}
+
+	// Reset request state
+	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusPending, 0)
+	req.ErrorMessage = ""
+
+	// Start background scraping
+	go h.processScrapeRequest(id, req.URL)
+
+	// Get updated request
+	updatedReq, _ := h.scrapeRequests.Get(id)
+	respondJSON(w, updatedReq, http.StatusOK)
+}
+
+// DeleteScrapeRequest deletes a scrape request
+func (h *Handler) DeleteScrapeRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	id := r.URL.Path[len("/api/scrape-requests/"):]
+	if id == "" {
+		respondError(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	if !h.scrapeRequests.Delete(id) {
+		respondError(w, "Scrape request not found", http.StatusNotFound)
+		return
+	}
+
+	respondJSON(w, map[string]string{"status": "deleted"}, http.StatusOK)
+}
+
+// processScrapeRequest processes a scrape request in the background
+func (h *Handler) processScrapeRequest(id, url string) {
+	// Update status to processing
+	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 10)
+
+	// Score the URL first
+	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 30)
+	scoreResp, err := h.scraper.ScoreLink(url)
+	if err != nil {
+		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to score link: %v", err))
+		return
+	}
+
+	// Check score threshold
+	if scoreResp.Score.Score < h.linkScoreThreshold {
+		h.scrapeRequests.SetFailed(id, fmt.Sprintf("URL score (%.2f) below threshold (%.2f)", scoreResp.Score.Score, h.linkScoreThreshold))
+		return
+	}
+
+	// Scrape the URL
+	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 50)
+	scrapeResp, err := h.scraper.Scrape(url)
+	if err != nil {
+		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to scrape: %v", err))
+		return
+	}
+
+	// Analyze the content
+	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 70)
+	analyzeResp, err := h.textAnalyzer.Analyze(scrapeResp.Content)
+	if err != nil {
+		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to analyze: %v", err))
+		return
+	}
+
+	// Combine metadata
+	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 90)
+	combinedMetadata := map[string]interface{}{
+		"scraper_metadata":      scrapeResp.Metadata,
+		"textanalyzer_metadata": analyzeResp.Metadata,
+	}
+
+	// Save to database
+	requestID := uuid.New().String()
+	req := &storage.Request{
+		ID:               requestID,
+		CreatedAt:        time.Now(),
+		SourceType:       "url",
+		SourceURL:        &url,
+		ScraperUUID:      &scrapeResp.ID,
+		TextAnalyzerUUID: analyzeResp.ID,
+		Tags:             analyzeResp.GetTags(),
+		Metadata:         combinedMetadata,
+	}
+
+	if err := h.storage.SaveRequest(req); err != nil {
+		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to save: %v", err))
+		return
+	}
+
+	// Mark as completed
+	h.scrapeRequests.SetCompleted(id, requestID)
+	log.Printf("Scrape request %s completed successfully, result saved as %s", id, requestID)
 }
 
 // Health check endpoint
