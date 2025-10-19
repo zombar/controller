@@ -7,10 +7,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/zombar/controller/internal/clients"
 	"github.com/zombar/controller/internal/config"
 	"github.com/zombar/controller/internal/handlers"
+	"github.com/zombar/controller/internal/scrapemanager"
 	"github.com/zombar/controller/internal/storage"
 )
 
@@ -52,8 +54,15 @@ func main() {
 	scraperClient := clients.NewScraperClient(cfg.ScraperBaseURL)
 	textAnalyzerClient := clients.NewTextAnalyzerClient(cfg.TextAnalyzerBaseURL)
 
+	// Initialize scrape manager with 15-minute TTL
+	scrapeManager := scrapemanager.New(15 * time.Minute)
+
+	// Start cleanup loop (runs every 1 minute)
+	cleanupStop := scrapeManager.StartCleanupLoop(1 * time.Minute)
+	defer close(cleanupStop)
+
 	// Initialize handlers
-	handler := handlers.New(store, scraperClient, textAnalyzerClient, cfg.LinkScoreThreshold)
+	handler := handlers.New(store, scraperClient, textAnalyzerClient, scrapeManager, cfg.LinkScoreThreshold)
 
 	// Setup routes
 	mux := http.NewServeMux()
@@ -67,6 +76,34 @@ func main() {
 	mux.HandleFunc("/api/scrape/batch", handler.BatchScrape)
 	mux.HandleFunc("/api/requests/", handler.GetRequest)
 	mux.HandleFunc("/api/requests", handler.ListRequests)
+
+	// Scrape request management routes
+	scrapeRequestHandler := func(w http.ResponseWriter, r *http.Request) {
+		// Route to appropriate handler based on path
+		path := r.URL.Path
+		if path == "/api/scrape/request/" || path == "/api/scrape/request" {
+			if r.Method == http.MethodPost {
+				handler.CreateScrapeRequest(w, r)
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				w.Write([]byte(`{"error":"Method not allowed"}`))
+			}
+		} else if r.Method == http.MethodGet {
+			handler.GetScrapeRequest(w, r)
+		} else if r.Method == http.MethodDelete {
+			handler.DeleteScrapeRequest(w, r)
+		} else if len(path) > len("/api/scrape/request/") && path[len(path)-6:] == "/retry" {
+			handler.RetryScrapeRequest(w, r)
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte(`{"error":"Not found"}`))
+		}
+	}
+	mux.HandleFunc("/api/scrape/request/", scrapeRequestHandler)
+	mux.HandleFunc("/api/scrape/request", scrapeRequestHandler)
+	mux.HandleFunc("/api/scrape/requests", handler.ListScrapeRequests)
 
 	// Setup server with CORS middleware
 	addr := fmt.Sprintf(":%d", cfg.Port)

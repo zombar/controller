@@ -600,6 +600,252 @@ curl -X POST http://localhost:8080/api/scrape/batch \
 
 ---
 
+### Async Scrape Request Management
+
+The controller provides asynchronous scrape request management for tracking long-running scrape operations. Requests are tracked in-memory and automatically cleaned up after 15 minutes of completion.
+
+#### Create Scrape Request
+
+Submit a URL for asynchronous scraping and analysis. Returns immediately with a request ID for status tracking.
+
+**Request:**
+```http
+POST /api/scrape/request
+Content-Type: application/json
+
+{
+  "url": "https://example.com/article"
+}
+```
+
+**Parameters:**
+- `url` (string, required) - URL to scrape
+
+**Response:**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "url": "https://example.com/article",
+  "status": "pending",
+  "created_at": "2025-10-17T12:34:56.789Z",
+  "progress": 0,
+  "metadata": {}
+}
+```
+
+**Status Values:**
+- `pending` - Request queued for processing
+- `processing` - Currently being scraped
+- `completed` - Successfully completed
+- `failed` - Failed with error
+
+**Duplicate URL Handling:** If a URL is already being scraped (status is `pending` or `processing`), the existing request is returned instead of creating a duplicate.
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/scrape/request \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article"}'
+```
+
+---
+
+#### Get Scrape Request Status
+
+Retrieve the current status of a scrape request.
+
+**Request:**
+```http
+GET /api/scrape/request/{id}
+```
+
+**Response (Processing):**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "url": "https://example.com/article",
+  "status": "processing",
+  "created_at": "2025-10-17T12:34:56.789Z",
+  "started_at": "2025-10-17T12:34:57.123Z",
+  "progress": 50,
+  "metadata": {}
+}
+```
+
+**Response (Completed):**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "url": "https://example.com/article",
+  "status": "completed",
+  "created_at": "2025-10-17T12:34:56.789Z",
+  "started_at": "2025-10-17T12:34:57.123Z",
+  "completed_at": "2025-10-17T12:35:02.456Z",
+  "result_request_id": "660e8400-e29b-41d4-a716-446655440001",
+  "progress": 100,
+  "metadata": {}
+}
+```
+
+**Response (Failed):**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "url": "https://example.com/article",
+  "status": "failed",
+  "created_at": "2025-10-17T12:34:56.789Z",
+  "started_at": "2025-10-17T12:34:57.123Z",
+  "completed_at": "2025-10-17T12:35:00.789Z",
+  "error_message": "Failed to scrape URL: connection timeout",
+  "progress": 30,
+  "metadata": {}
+}
+```
+
+**Fields:**
+- `result_request_id` (string, optional) - ID of the completed request in the database (retrieve with `/api/requests/{id}`)
+- `error_message` (string, optional) - Error description for failed requests
+- `progress` (integer) - Progress percentage (0-100)
+- `started_at` (timestamp, optional) - When processing began
+- `completed_at` (timestamp, optional) - When processing finished
+
+**Error Response (404):**
+```json
+{
+  "error": "Scrape request not found"
+}
+```
+
+**Example:**
+```bash
+curl http://localhost:8080/api/scrape/request/550e8400-e29b-41d4-a716-446655440000
+```
+
+---
+
+#### List Scrape Requests
+
+List all active scrape requests being tracked by the controller.
+
+**Request:**
+```http
+GET /api/scrape/requests
+```
+
+**Response:**
+```json
+{
+  "requests": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "url": "https://example.com/article-1",
+      "status": "processing",
+      "created_at": "2025-10-17T12:34:56.789Z",
+      "started_at": "2025-10-17T12:34:57.123Z",
+      "progress": 75,
+      "metadata": {}
+    },
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440001",
+      "url": "https://example.com/article-2",
+      "status": "completed",
+      "created_at": "2025-10-17T12:30:00.000Z",
+      "started_at": "2025-10-17T12:30:01.234Z",
+      "completed_at": "2025-10-17T12:30:10.567Z",
+      "result_request_id": "770e8400-e29b-41d4-a716-446655440002",
+      "progress": 100,
+      "metadata": {}
+    }
+  ],
+  "count": 2
+}
+```
+
+**Automatic Cleanup:** Completed and failed requests are automatically removed from the in-memory tracker 15 minutes after completion. This endpoint only returns requests still being tracked.
+
+**Example:**
+```bash
+curl http://localhost:8080/api/scrape/requests
+```
+
+---
+
+#### Delete Scrape Request
+
+Remove a scrape request from tracking. Does not cancel in-progress operations.
+
+**Request:**
+```http
+DELETE /api/scrape/request/{id}
+```
+
+**Response:**
+```json
+{
+  "message": "Scrape request deleted"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "error": "Scrape request not found"
+}
+```
+
+**Example:**
+```bash
+curl -X DELETE http://localhost:8080/api/scrape/request/550e8400-e29b-41d4-a716-446655440000
+```
+
+**Note:** Deleting a request removes it from the tracking system but does not interrupt an ongoing scrape operation.
+
+---
+
+#### Retry Scrape Request
+
+Retry a failed scrape request.
+
+**Request:**
+```http
+POST /api/scrape/request/{id}/retry
+```
+
+**Response:**
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "url": "https://example.com/article",
+  "status": "pending",
+  "created_at": "2025-10-17T12:34:56.789Z",
+  "progress": 0,
+  "metadata": {}
+}
+```
+
+**Error Response (400 - Not Failed):**
+```json
+{
+  "error": "Can only retry failed requests"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "error": "Scrape request not found"
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:8080/api/scrape/request/550e8400-e29b-41d4-a716-446655440000/retry
+```
+
+**Retry Behavior:** Resets the request to `pending` status, clears error messages, and requeues for processing. Only works for requests in `failed` status.
+
+---
+
 ### Get Request by ID
 
 Retrieve detailed information about a specific request.
@@ -808,6 +1054,43 @@ async function batchScrape(urls: string[], force = false): Promise<BatchScrapeRe
   });
   return response.json();
 }
+
+// Create async scrape request
+async function createScrapeRequest(url: string): Promise<ScrapeRequest> {
+  const response = await fetch('http://localhost:8080/api/scrape/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url })
+  });
+  return response.json();
+}
+
+// Get scrape request status
+async function getScrapeRequest(id: string): Promise<ScrapeRequest> {
+  const response = await fetch(`http://localhost:8080/api/scrape/request/${id}`);
+  return response.json();
+}
+
+// List scrape requests
+async function listScrapeRequests(): Promise<ScrapeRequestList> {
+  const response = await fetch('http://localhost:8080/api/scrape/requests');
+  return response.json();
+}
+
+// Delete scrape request
+async function deleteScrapeRequest(id: string): Promise<void> {
+  await fetch(`http://localhost:8080/api/scrape/request/${id}`, {
+    method: 'DELETE'
+  });
+}
+
+// Retry scrape request
+async function retryScrapeRequest(id: string): Promise<ScrapeRequest> {
+  const response = await fetch(`http://localhost:8080/api/scrape/request/${id}/retry`, {
+    method: 'POST'
+  });
+  return response.json();
+}
 ```
 
 ### Python
@@ -867,6 +1150,34 @@ def batch_scrape(urls: list[str], force: bool = False) -> dict:
         json={'urls': urls, 'force': force}
     )
     return response.json()
+
+# Create async scrape request
+def create_scrape_request(url: str) -> dict:
+    response = requests.post(
+        'http://localhost:8080/api/scrape/request',
+        json={'url': url}
+    )
+    return response.json()
+
+# Get scrape request status
+def get_scrape_request(id: str) -> dict:
+    response = requests.get(f'http://localhost:8080/api/scrape/request/{id}')
+    return response.json()
+
+# List scrape requests
+def list_scrape_requests() -> dict:
+    response = requests.get('http://localhost:8080/api/scrape/requests')
+    return response.json()
+
+# Delete scrape request
+def delete_scrape_request(id: str) -> dict:
+    response = requests.delete(f'http://localhost:8080/api/scrape/request/{id}')
+    return response.json()
+
+# Retry scrape request
+def retry_scrape_request(id: str) -> dict:
+    response = requests.post(f'http://localhost:8080/api/scrape/request/{id}/retry')
+    return response.json()
 ```
 
 ### cURL
@@ -916,6 +1227,23 @@ curl -X POST http://localhost:8080/api/scrape/batch \
     ],
     "force": false
   }'
+
+# Create async scrape request
+curl -X POST http://localhost:8080/api/scrape/request \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article"}'
+
+# Get scrape request status
+curl http://localhost:8080/api/scrape/request/550e8400-e29b-41d4-a716-446655440000
+
+# List scrape requests
+curl http://localhost:8080/api/scrape/requests
+
+# Delete scrape request
+curl -X DELETE http://localhost:8080/api/scrape/request/550e8400-e29b-41d4-a716-446655440000
+
+# Retry scrape request
+curl -X POST http://localhost:8080/api/scrape/request/550e8400-e29b-41d4-a716-446655440000/retry
 ```
 
 ---

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/zombar/controller/internal/clients"
+	"github.com/zombar/controller/internal/scrapemanager"
 	"github.com/zombar/controller/internal/storage"
 )
 
@@ -17,15 +18,17 @@ type Handler struct {
 	storage            *storage.Storage
 	scraper            *clients.ScraperClient
 	textAnalyzer       *clients.TextAnalyzerClient
+	scrapeManager      *scrapemanager.Manager
 	linkScoreThreshold float64
 }
 
 // New creates a new Handler
-func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, linkScoreThreshold float64) *Handler {
+func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scrapeManager *scrapemanager.Manager, linkScoreThreshold float64) *Handler {
 	return &Handler{
 		storage:            store,
 		scraper:            scraper,
 		textAnalyzer:       textAnalyzer,
+		scrapeManager:      scrapeManager,
 		linkScoreThreshold: linkScoreThreshold,
 	}
 }
@@ -554,6 +557,278 @@ func (h *Handler) BatchScrape(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, response, http.StatusOK)
+}
+
+// CreateScrapeRequest handles creating an async scrape request
+func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req ScrapeURLRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.URL == "" {
+		respondError(w, "URL is required", http.StatusBadRequest)
+		return
+	}
+
+	// Create scrape request (will reuse existing if URL is already being scraped)
+	scrapeReq := h.scrapeManager.Create(req.URL)
+
+	// If this is a new request, start processing asynchronously
+	if scrapeReq.Status == scrapemanager.StatusPending {
+		go h.processScrapeRequest(scrapeReq.ID)
+	}
+
+	respondJSON(w, scrapeReq, http.StatusCreated)
+}
+
+// GetScrapeRequest retrieves a scrape request by ID
+func (h *Handler) GetScrapeRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract ID from URL path
+	id := r.URL.Path[len("/api/scrape/request/"):]
+	if id == "" {
+		respondError(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	scrapeReq, exists := h.scrapeManager.Get(id)
+	if !exists {
+		respondError(w, "Scrape request not found", http.StatusNotFound)
+		return
+	}
+
+	respondJSON(w, scrapeReq, http.StatusOK)
+}
+
+// ListScrapeRequests lists all scrape requests
+func (h *Handler) ListScrapeRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	requests := h.scrapeManager.List()
+
+	response := map[string]interface{}{
+		"requests": requests,
+		"count":    len(requests),
+	}
+
+	respondJSON(w, response, http.StatusOK)
+}
+
+// DeleteScrapeRequest deletes a scrape request
+func (h *Handler) DeleteScrapeRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract ID from URL path
+	id := r.URL.Path[len("/api/scrape/request/"):]
+	if id == "" {
+		respondError(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	if !h.scrapeManager.Delete(id) {
+		respondError(w, "Scrape request not found", http.StatusNotFound)
+		return
+	}
+
+	response := map[string]string{
+		"message": "Scrape request deleted",
+	}
+	respondJSON(w, response, http.StatusOK)
+}
+
+// RetryScrapeRequest retries a failed scrape request
+func (h *Handler) RetryScrapeRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract ID from URL path (format: /api/scrape/request/{id}/retry)
+	path := r.URL.Path[len("/api/scrape/request/"):]
+	id := path[:len(path)-len("/retry")]
+	if id == "" {
+		respondError(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	scrapeReq, exists := h.scrapeManager.Get(id)
+	if !exists {
+		respondError(w, "Scrape request not found", http.StatusNotFound)
+		return
+	}
+
+	// Only retry failed requests
+	if scrapeReq.Status != scrapemanager.StatusFailed {
+		respondError(w, "Can only retry failed requests", http.StatusBadRequest)
+		return
+	}
+
+	// Reset request status
+	h.scrapeManager.UpdateStatus(id, scrapemanager.StatusPending)
+	h.scrapeManager.UpdateProgress(id, 0)
+	h.scrapeManager.SetError(id, "")
+
+	// Start processing asynchronously
+	go h.processScrapeRequest(id)
+
+	// Get updated request
+	scrapeReq, _ = h.scrapeManager.Get(id)
+	respondJSON(w, scrapeReq, http.StatusOK)
+}
+
+// processScrapeRequest processes a scrape request asynchronously
+func (h *Handler) processScrapeRequest(id string) {
+	scrapeReq, exists := h.scrapeManager.Get(id)
+	if !exists {
+		return
+	}
+
+	// Update status to processing
+	h.scrapeManager.UpdateStatus(id, scrapemanager.StatusProcessing)
+	h.scrapeManager.UpdateProgress(id, 10)
+
+	// Score the link first
+	scoreResp, err := h.scraper.ScoreLink(scrapeReq.URL)
+	if err != nil {
+		h.scrapeManager.SetError(id, fmt.Sprintf("Failed to score URL: %v", err))
+		h.scrapeManager.UpdateStatus(id, scrapemanager.StatusFailed)
+		return
+	}
+
+	h.scrapeManager.UpdateProgress(id, 30)
+
+	// Check if score meets threshold
+	if scoreResp.Score.Score < h.linkScoreThreshold {
+		// Score is below threshold - save scoring metadata only
+		controllerID := uuid.New().String()
+		record := &storage.Request{
+			ID:         controllerID,
+			CreatedAt:  time.Now().UTC(),
+			SourceType: "url",
+			SourceURL:  &scrapeReq.URL,
+			Tags:       scoreResp.Score.Categories,
+			Metadata: map[string]interface{}{
+				"link_score": map[string]interface{}{
+					"score":                scoreResp.Score.Score,
+					"reason":               scoreResp.Score.Reason,
+					"categories":           scoreResp.Score.Categories,
+					"is_recommended":       scoreResp.Score.IsRecommended,
+					"malicious_indicators": scoreResp.Score.MaliciousIndicators,
+				},
+				"below_threshold": true,
+				"threshold":       h.linkScoreThreshold,
+			},
+		}
+
+		if err := h.storage.SaveRequest(record); err != nil {
+			h.scrapeManager.SetError(id, fmt.Sprintf("Failed to save request: %v", err))
+			h.scrapeManager.UpdateStatus(id, scrapemanager.StatusFailed)
+			return
+		}
+
+		h.scrapeManager.SetResult(id, record.ID)
+		h.scrapeManager.UpdateProgress(id, 100)
+		h.scrapeManager.UpdateStatus(id, scrapemanager.StatusCompleted)
+		return
+	}
+
+	h.scrapeManager.UpdateProgress(id, 50)
+
+	// Proceed with full scraping
+	scraperResp, err := h.scraper.Scrape(scrapeReq.URL)
+	if err != nil {
+		h.scrapeManager.SetError(id, fmt.Sprintf("Failed to scrape URL: %v", err))
+		h.scrapeManager.UpdateStatus(id, scrapemanager.StatusFailed)
+		return
+	}
+
+	h.scrapeManager.UpdateProgress(id, 70)
+
+	// Analyze the text
+	analyzerResp, err := h.textAnalyzer.Analyze(scraperResp.Content)
+	if err != nil {
+		h.scrapeManager.SetError(id, fmt.Sprintf("Failed to analyze text: %v", err))
+		h.scrapeManager.UpdateStatus(id, scrapemanager.StatusFailed)
+		return
+	}
+
+	h.scrapeManager.UpdateProgress(id, 90)
+
+	// Build combined metadata
+	scraperMetadata := make(map[string]interface{})
+	scraperMetadata["title"] = scraperResp.Title
+	scraperMetadata["content"] = scraperResp.Content
+	scraperMetadata["url"] = scraperResp.URL
+
+	if scraperResp.Metadata != nil {
+		for k, v := range scraperResp.Metadata {
+			scraperMetadata[k] = v
+		}
+	}
+
+	combinedMetadata := map[string]interface{}{
+		"scraper_metadata":  scraperMetadata,
+		"analyzer_metadata": analyzerResp.Metadata,
+	}
+
+	if scraperResp.Score != nil {
+		combinedMetadata["link_score"] = map[string]interface{}{
+			"score":                scraperResp.Score.Score,
+			"reason":               scraperResp.Score.Reason,
+			"categories":           scraperResp.Score.Categories,
+			"is_recommended":       scraperResp.Score.IsRecommended,
+			"malicious_indicators": scraperResp.Score.MaliciousIndicators,
+		}
+	} else {
+		combinedMetadata["link_score"] = map[string]interface{}{
+			"score":                scoreResp.Score.Score,
+			"reason":               scoreResp.Score.Reason,
+			"categories":           scoreResp.Score.Categories,
+			"is_recommended":       scoreResp.Score.IsRecommended,
+			"malicious_indicators": scoreResp.Score.MaliciousIndicators,
+		}
+	}
+
+	// Save to database
+	controllerID := uuid.New().String()
+	record := &storage.Request{
+		ID:               controllerID,
+		CreatedAt:        time.Now().UTC(),
+		SourceType:       "url",
+		SourceURL:        &scrapeReq.URL,
+		ScraperUUID:      &scraperResp.ID,
+		TextAnalyzerUUID: analyzerResp.ID,
+		Tags:             analyzerResp.GetTags(),
+		Metadata:         combinedMetadata,
+	}
+
+	if err := h.storage.SaveRequest(record); err != nil {
+		h.scrapeManager.SetError(id, fmt.Sprintf("Failed to save request: %v", err))
+		h.scrapeManager.UpdateStatus(id, scrapemanager.StatusFailed)
+		return
+	}
+
+	// Mark as completed
+	h.scrapeManager.SetResult(id, record.ID)
+	h.scrapeManager.UpdateProgress(id, 100)
+	h.scrapeManager.UpdateStatus(id, scrapemanager.StatusCompleted)
 }
 
 // Health check endpoint

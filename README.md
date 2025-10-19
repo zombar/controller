@@ -7,6 +7,8 @@ A central orchestration service that coordinates the scraper and textanalyzer mi
 - Orchestrates scraper and textanalyzer services
 - Unified API for URL scraping with automatic text analysis
 - Direct text analysis without scraping
+- Asynchronous scrape request tracking with progress monitoring
+- In-memory request management with automatic cleanup
 - AI-powered link extraction and filtering
 - Batch URL scraping with caching support
 - Link quality scoring to filter low-quality content
@@ -103,6 +105,23 @@ curl -X POST http://localhost:8080/api/images/search \
   -H "Content-Type: application/json" \
   -d '{"tags": ["cat", "animal"]}'
 
+# Create async scrape request
+curl -X POST http://localhost:8080/api/scrape/request \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/article"}'
+
+# Get scrape request status
+curl http://localhost:8080/api/scrape/request/550e8400-e29b-41d4-a716-446655440000
+
+# List scrape requests
+curl http://localhost:8080/api/scrape/requests
+
+# Delete scrape request
+curl -X DELETE http://localhost:8080/api/scrape/request/550e8400-e29b-41d4-a716-446655440000
+
+# Retry failed scrape
+curl -X POST http://localhost:8080/api/scrape/request/550e8400-e29b-41d4-a716-446655440000/retry
+
 # Get request by ID
 curl http://localhost:8080/requests/550e8400-e29b-41d4-a716-446655440000
 
@@ -144,6 +163,13 @@ The controller acts as an orchestrator for the scraper and textanalyzer services
 2. Controller calls textanalyzer service
 3. Controller stores UUID and tags
 4. Controller returns analysis result
+
+**Async Scrape Request Flow:**
+1. Client submits URL for async scraping
+2. Controller returns request ID immediately
+3. Background goroutine processes scrape
+4. Client polls for status updates
+5. Completed requests auto-cleanup after 15 minutes
 
 ## Output Format
 
@@ -222,13 +248,18 @@ controller/
 ├── internal/
 │   ├── clients/
 │   │   ├── scraper.go          # Scraper service client
-│   │   └── textanalyzer.go     # TextAnalyzer client
+│   │   ├── scraper_test.go     # Scraper client tests
+│   │   ├── textanalyzer.go     # TextAnalyzer client
+│   │   └── textanalyzer_test.go # TextAnalyzer tests
 │   ├── config/
 │   │   ├── config.go           # Configuration management
 │   │   └── config_test.go      # Config tests
 │   ├── handlers/
 │   │   ├── handlers.go         # HTTP handlers
 │   │   └── handlers_test.go    # Handler tests
+│   ├── scrapemanager/
+│   │   ├── manager.go          # In-memory request tracking
+│   │   └── manager_test.go     # Manager tests
 │   └── storage/
 │       ├── migrations.go       # Database migrations
 │       ├── storage.go          # Database operations
