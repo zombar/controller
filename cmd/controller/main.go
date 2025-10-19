@@ -64,9 +64,52 @@ func main() {
 	mux.HandleFunc("/api/search", handler.SearchTags)
 	mux.HandleFunc("/api/images/search", handler.SearchImageTags)
 	mux.HandleFunc("/api/extract-links", handler.ExtractLinks)
-	mux.HandleFunc("/api/requests/", handler.GetRequest)
+	mux.HandleFunc("/api/requests/", func(w http.ResponseWriter, r *http.Request) {
+		// Handle /api/requests/{id}/tombstone
+		if len(r.URL.Path) > len("/api/requests/") && r.URL.Path[len(r.URL.Path)-10:] == "/tombstone" {
+			if r.Method == http.MethodPut {
+				handler.TombstoneRequest(w, r)
+			} else if r.Method == http.MethodDelete {
+				handler.UntombstoneRequest(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
+		// Handle /api/requests/{id}
+		if r.Method == http.MethodGet {
+			handler.GetRequest(w, r)
+		} else if r.Method == http.MethodDelete {
+			handler.DeleteRequest(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 	mux.HandleFunc("/api/requests", handler.ListRequests)
 	mux.HandleFunc("/api/documents/", handler.GetDocumentImages) // Handles /api/documents/{scraper_uuid}/images
+	mux.HandleFunc("/api/images/", func(w http.ResponseWriter, r *http.Request) {
+		// Handle /api/images/{id}/tombstone
+		if len(r.URL.Path) > len("/api/images/") && r.URL.Path[len(r.URL.Path)-10:] == "/tombstone" {
+			if r.Method == http.MethodPut {
+				handler.TombstoneImage(w, r)
+			} else if r.Method == http.MethodDelete {
+				handler.UntombstoneImage(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
+		// Handle GET /api/images/{id}
+		if r.Method == http.MethodGet {
+			handler.GetImage(w, r)
+		} else if r.Method == http.MethodDelete {
+			handler.DeleteImage(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
 
 	// Async scrape request routes
 	mux.HandleFunc("/api/scrape-requests", func(w http.ResponseWriter, r *http.Request) {
@@ -78,6 +121,9 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+
+	// Async text analysis request route
+	mux.HandleFunc("/api/analyze-requests", handler.CreateTextAnalysisRequest)
 	mux.HandleFunc("/api/scrape-requests/", func(w http.ResponseWriter, r *http.Request) {
 		// Handle /api/scrape-requests/{id}/retry
 		if len(r.URL.Path) > len("/api/scrape-requests/") && r.URL.Path[len(r.URL.Path)-6:] == "/retry" {

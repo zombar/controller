@@ -95,8 +95,17 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 	// Create controller request record
 	controllerID := uuid.New().String()
 
-	// Check if score meets threshold
-	if scoreResp.Score.Score < h.linkScoreThreshold {
+	// Check if this is an image URL (skip threshold check for images)
+	isImageURL := false
+	for _, category := range scoreResp.Score.Categories {
+		if category == "image" {
+			isImageURL = true
+			break
+		}
+	}
+
+	// Check if score meets threshold (skip for image URLs)
+	if !isImageURL && scoreResp.Score.Score < h.linkScoreThreshold {
 		// Score is below threshold - return scoring metadata only
 		record := &storage.Request{
 			ID:         controllerID,
@@ -135,17 +144,10 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Score meets or exceeds threshold - proceed with full scraping and analysis
+	// Score meets or exceeds threshold - proceed with full scraping
 	scraperResp, err := h.scraper.Scrape(req.URL)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to scrape URL: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// Call text analyzer service with the main text
-	analyzerResp, err := h.textAnalyzer.Analyze(scraperResp.Content)
-	if err != nil {
-		respondError(w, fmt.Sprintf("Failed to analyze text: %v", err), http.StatusInternalServerError)
 		return
 	}
 
@@ -162,10 +164,21 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Analyze the content (skip for image URLs)
+	var analyzerResp *clients.TextAnalyzerResponse
+	if !isImageURL {
+		analyzerResp, err = h.textAnalyzer.Analyze(scraperResp.Content)
+		if err != nil {
+			respondError(w, fmt.Sprintf("Failed to analyze text: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
 	// Build combined metadata
-	combinedMetadata := map[string]interface{}{
-		"scraper_metadata":  scraperMetadata,
-		"analyzer_metadata": analyzerResp.Metadata,
+	combinedMetadata := make(map[string]interface{})
+	combinedMetadata["scraper_metadata"] = scraperMetadata
+	if analyzerResp != nil {
+		combinedMetadata["analyzer_metadata"] = analyzerResp.Metadata
 	}
 
 	// Add link score from scraper response if available, otherwise use preliminary score
@@ -188,14 +201,27 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Get tags and analyzer UUID (handle nil for image URLs)
+	var tags []string
+	var analyzerUUID string
+	if analyzerResp != nil {
+		tags = analyzerResp.GetTags()
+		analyzerUUID = analyzerResp.ID
+	} else {
+		// For image URLs, use categories from link score as tags
+		if scraperResp.Score != nil {
+			tags = scraperResp.Score.Categories
+		}
+	}
+
 	record := &storage.Request{
 		ID:               controllerID,
 		CreatedAt:        time.Now().UTC(),
 		SourceType:       "url",
 		SourceURL:        &req.URL,
 		ScraperUUID:      &scraperResp.ID,
-		TextAnalyzerUUID: analyzerResp.ID,
-		Tags:             analyzerResp.GetTags(),
+		TextAnalyzerUUID: analyzerUUID,
+		Tags:             tags,
 		Metadata:         combinedMetadata,
 	}
 
@@ -254,6 +280,7 @@ func (h *Handler) AnalyzeText(w http.ResponseWriter, r *http.Request) {
 		Tags:             analyzerResp.GetTags(),
 		Metadata: map[string]interface{}{
 			"analyzer_metadata": analyzerResp.Metadata,
+			"original_text":     req.Text, // Store original submitted text
 		},
 	}
 
@@ -343,6 +370,209 @@ func (h *Handler) GetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, response, http.StatusOK)
+}
+
+// DeleteRequest deletes a request and all associated data from the controller and upstream services
+func (h *Handler) DeleteRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract ID from URL path
+	id := r.URL.Path[len("/api/requests/"):]
+	if id == "" {
+		respondError(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get the request to find associated UUIDs before deletion
+	record, err := h.storage.GetRequest(id)
+	if err != nil {
+		if err.Error() == "request not found" {
+			respondError(w, "Request not found", http.StatusNotFound)
+			return
+		}
+		respondError(w, fmt.Sprintf("Failed to get request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Delete from upstream services first
+	if record.ScraperUUID != nil && *record.ScraperUUID != "" {
+		if err := h.scraper.DeleteScrape(*record.ScraperUUID); err != nil {
+			log.Printf("Warning: Failed to delete scrape %s: %v", *record.ScraperUUID, err)
+		}
+	}
+
+	if record.TextAnalyzerUUID != "" {
+		if err := h.textAnalyzer.DeleteAnalysis(record.TextAnalyzerUUID); err != nil {
+			log.Printf("Warning: Failed to delete analysis %s: %v", record.TextAnalyzerUUID, err)
+		}
+	}
+
+	// Delete from local storage
+	if err := h.storage.DeleteRequest(id); err != nil {
+		respondError(w, fmt.Sprintf("Failed to delete request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, map[string]string{"message": "Request deleted successfully"}, http.StatusOK)
+}
+
+// DeleteImage deletes an image from the scraper service
+func (h *Handler) DeleteImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract image ID from URL path
+	imageID := r.URL.Path[len("/api/images/"):]
+	if imageID == "" {
+		respondError(w, "Image ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Delete from scraper service
+	if err := h.scraper.DeleteImage(imageID); err != nil {
+		respondError(w, fmt.Sprintf("Failed to delete image: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, map[string]string{"message": "Image deleted successfully"}, http.StatusOK)
+}
+
+// TombstoneRequest marks a request as scheduled for deletion by adding tombstone_datetime to metadata
+func (h *Handler) TombstoneRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPatch {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract ID from URL path
+	id := r.URL.Path[len("/api/requests/"):]
+	// Remove the "/tombstone" suffix
+	id = id[:len(id)-len("/tombstone")]
+	if id == "" {
+		respondError(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get the existing request
+	record, err := h.storage.GetRequest(id)
+	if err != nil {
+		if err.Error() == "request not found" {
+			respondError(w, "Request not found", http.StatusNotFound)
+			return
+		}
+		respondError(w, fmt.Sprintf("Failed to get request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Add tombstone_datetime to metadata
+	if record.Metadata == nil {
+		record.Metadata = make(map[string]interface{})
+	}
+	record.Metadata["tombstone_datetime"] = time.Now().UTC().Format(time.RFC3339)
+
+	// Update the request in storage
+	if err := h.storage.UpdateRequestMetadata(id, record.Metadata); err != nil {
+		respondError(w, fmt.Sprintf("Failed to update request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, map[string]string{"message": "Request tombstoned successfully"}, http.StatusOK)
+}
+
+// UntombstoneRequest removes the tombstone from a request
+func (h *Handler) UntombstoneRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract ID from URL path
+	id := r.URL.Path[len("/api/requests/"):]
+	// Remove the "/tombstone" suffix
+	id = id[:len(id)-len("/tombstone")]
+	if id == "" {
+		respondError(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get the existing request
+	record, err := h.storage.GetRequest(id)
+	if err != nil {
+		if err.Error() == "request not found" {
+			respondError(w, "Request not found", http.StatusNotFound)
+			return
+		}
+		respondError(w, fmt.Sprintf("Failed to get request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Remove tombstone_datetime from metadata
+	if record.Metadata != nil {
+		delete(record.Metadata, "tombstone_datetime")
+	}
+
+	// Update the request in storage
+	if err := h.storage.UpdateRequestMetadata(id, record.Metadata); err != nil {
+		respondError(w, fmt.Sprintf("Failed to update request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, map[string]string{"message": "Request tombstone removed successfully"}, http.StatusOK)
+}
+
+// TombstoneImage marks an image as scheduled for deletion
+func (h *Handler) TombstoneImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut && r.Method != http.MethodPatch {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract image ID from URL path
+	imageID := r.URL.Path[len("/api/images/"):]
+	// Remove the "/tombstone" suffix
+	imageID = imageID[:len(imageID)-len("/tombstone")]
+	if imageID == "" {
+		respondError(w, "Image ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Tombstone via scraper service
+	if err := h.scraper.TombstoneImage(imageID); err != nil {
+		respondError(w, fmt.Sprintf("Failed to tombstone image: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, map[string]string{"message": "Image tombstoned successfully"}, http.StatusOK)
+}
+
+// UntombstoneImage removes the tombstone from an image
+func (h *Handler) UntombstoneImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract image ID from URL path
+	imageID := r.URL.Path[len("/api/images/"):]
+	// Remove the "/tombstone" suffix
+	imageID = imageID[:len(imageID)-len("/tombstone")]
+	if imageID == "" {
+		respondError(w, "Image ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Untombstone via scraper service
+	if err := h.scraper.UntombstoneImage(imageID); err != nil {
+		respondError(w, fmt.Sprintf("Failed to untombstone image: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, map[string]string{"message": "Image tombstone removed successfully"}, http.StatusOK)
 }
 
 // ListRequests lists all requests with pagination
@@ -465,6 +695,30 @@ func (h *Handler) GetDocumentImages(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, response, http.StatusOK)
 }
 
+// GetImage retrieves a single image by ID
+func (h *Handler) GetImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract image ID from URL path
+	imageID := r.URL.Path[len("/api/images/"):]
+	if imageID == "" {
+		respondError(w, "Image ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Call scraper service to get image by ID
+	image, err := h.scraper.GetImageByID(imageID)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to retrieve image: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, image, http.StatusOK)
+}
+
 // ScoreLinkRequest represents a request to score a link
 type ScoreLinkRequest struct {
 	URL string `json:"url"`
@@ -579,6 +833,33 @@ func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, scrapeReq, http.StatusOK)
 }
 
+// CreateTextAnalysisRequest creates a new async text analysis request
+func (h *Handler) CreateTextAnalysisRequest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req AnalyzeTextRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Text == "" {
+		respondError(w, "Text is required", http.StatusBadRequest)
+		return
+	}
+
+	// Create text analysis request
+	analysisReq, _ := h.scrapeRequests.CreateText(req.Text)
+
+	// Start background analysis
+	go h.processTextAnalysisRequest(analysisReq.ID, req.Text)
+
+	respondJSON(w, analysisReq, http.StatusOK)
+}
+
 // ListScrapeRequests returns all active scrape requests
 func (h *Handler) ListScrapeRequests(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -689,8 +970,17 @@ func (h *Handler) processScrapeRequest(id, url string) {
 		return
 	}
 
-	// Check score threshold
-	if scoreResp.Score.Score < h.linkScoreThreshold {
+	// Check if this is an image URL (skip threshold check for images)
+	isImageURL := false
+	for _, category := range scoreResp.Score.Categories {
+		if category == "image" {
+			isImageURL = true
+			break
+		}
+	}
+
+	// Check score threshold (skip for image URLs)
+	if !isImageURL && scoreResp.Score.Score < h.linkScoreThreshold {
 		h.scrapeRequests.SetFailed(id, fmt.Sprintf("URL score (%.2f) below threshold (%.2f)", scoreResp.Score.Score, h.linkScoreThreshold))
 		return
 	}
@@ -703,31 +993,84 @@ func (h *Handler) processScrapeRequest(id, url string) {
 		return
 	}
 
-	// Analyze the content
+	// Build scraper metadata from the scraper response
 	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 70)
-	analyzeResp, err := h.textAnalyzer.Analyze(scrapeResp.Content)
-	if err != nil {
-		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to analyze: %v", err))
-		return
+	scraperMetadata := make(map[string]interface{})
+	scraperMetadata["title"] = scrapeResp.Title
+	scraperMetadata["content"] = scrapeResp.Content
+	scraperMetadata["url"] = scrapeResp.URL
+
+	// Also include fields from the scraper's Metadata (description, keywords, etc.)
+	if scrapeResp.Metadata != nil {
+		for k, v := range scrapeResp.Metadata {
+			scraperMetadata[k] = v
+		}
 	}
 
-	// Combine metadata
+	// Analyze the content (skip for image URLs)
+	var analyzeResp *clients.TextAnalyzerResponse
+	if !isImageURL {
+		h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 80)
+		analyzeResp, err = h.textAnalyzer.Analyze(scrapeResp.Content)
+		if err != nil {
+			h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to analyze: %v", err))
+			return
+		}
+	}
+
 	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 90)
-	combinedMetadata := map[string]interface{}{
-		"scraper_metadata":      scrapeResp.Metadata,
-		"textanalyzer_metadata": analyzeResp.Metadata,
+
+	// Combine metadata
+	combinedMetadata := make(map[string]interface{})
+	combinedMetadata["scraper_metadata"] = scraperMetadata
+	if analyzeResp != nil {
+		combinedMetadata["analyzer_metadata"] = analyzeResp.Metadata
+	}
+
+	// Add link score
+	if scrapeResp.Score != nil {
+		combinedMetadata["link_score"] = map[string]interface{}{
+			"score":                scrapeResp.Score.Score,
+			"reason":               scrapeResp.Score.Reason,
+			"categories":           scrapeResp.Score.Categories,
+			"is_recommended":       scrapeResp.Score.IsRecommended,
+			"malicious_indicators": scrapeResp.Score.MaliciousIndicators,
+		}
+	} else {
+		// Fallback to preliminary score if scraper didn't return one
+		combinedMetadata["link_score"] = map[string]interface{}{
+			"score":                scoreResp.Score.Score,
+			"reason":               scoreResp.Score.Reason,
+			"categories":           scoreResp.Score.Categories,
+			"is_recommended":       scoreResp.Score.IsRecommended,
+			"malicious_indicators": scoreResp.Score.MaliciousIndicators,
+		}
 	}
 
 	// Save to database
 	requestID := uuid.New().String()
+
+	// Get tags and analyzer UUID (handle nil for image URLs)
+	var tags []string
+	var analyzerUUID string
+	if analyzeResp != nil {
+		tags = analyzeResp.GetTags()
+		analyzerUUID = analyzeResp.ID
+	} else {
+		// For image URLs, use categories from link score as tags
+		if scrapeResp.Score != nil {
+			tags = scrapeResp.Score.Categories
+		}
+	}
+
 	req := &storage.Request{
 		ID:               requestID,
 		CreatedAt:        time.Now(),
 		SourceType:       "url",
 		SourceURL:        &url,
 		ScraperUUID:      &scrapeResp.ID,
-		TextAnalyzerUUID: analyzeResp.ID,
-		Tags:             analyzeResp.GetTags(),
+		TextAnalyzerUUID: analyzerUUID,
+		Tags:             tags,
 		Metadata:         combinedMetadata,
 	}
 
@@ -739,6 +1082,45 @@ func (h *Handler) processScrapeRequest(id, url string) {
 	// Mark as completed
 	h.scrapeRequests.SetCompleted(id, requestID)
 	log.Printf("Scrape request %s completed successfully, result saved as %s", id, requestID)
+}
+
+// processTextAnalysisRequest processes a text analysis request in the background
+func (h *Handler) processTextAnalysisRequest(id, text string) {
+	// Update status to processing
+	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 30)
+
+	// Analyze the text
+	analyzeResp, err := h.textAnalyzer.Analyze(text)
+	if err != nil {
+		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to analyze: %v", err))
+		return
+	}
+
+	// Update progress
+	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 90)
+
+	// Save to database
+	requestID := uuid.New().String()
+	req := &storage.Request{
+		ID:               requestID,
+		CreatedAt:        time.Now(),
+		SourceType:       "text",
+		TextAnalyzerUUID: analyzeResp.ID,
+		Tags:             analyzeResp.GetTags(),
+		Metadata: map[string]interface{}{
+			"analyzer_metadata": analyzeResp.Metadata,
+			"original_text":     text, // Store original submitted text
+		},
+	}
+
+	if err := h.storage.SaveRequest(req); err != nil {
+		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to save: %v", err))
+		return
+	}
+
+	// Mark as completed
+	h.scrapeRequests.SetCompleted(id, requestID)
+	log.Printf("Text analysis request %s completed successfully, result saved as %s", id, requestID)
 }
 
 // Health check endpoint

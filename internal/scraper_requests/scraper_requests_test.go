@@ -344,3 +344,188 @@ func TestDeletePreservesOtherRequests(t *testing.T) {
 		t.Errorf("Expected 1 request, got %d", len(requests))
 	}
 }
+
+// Text analysis request tests
+
+func TestCreateText(t *testing.T) {
+	manager := NewManager()
+	text := "This is some text to analyze"
+
+	req, isNew := manager.CreateText(text)
+
+	if !isNew {
+		t.Error("Expected isNew to be true for text request")
+	}
+
+	if req.ID == "" {
+		t.Error("Expected non-empty ID")
+	}
+
+	if req.SourceType != "text" {
+		t.Errorf("Expected SourceType 'text', got '%s'", req.SourceType)
+	}
+
+	if req.Text != text {
+		t.Errorf("Expected Text '%s', got '%s'", text, req.Text)
+	}
+
+	if req.URL != "" {
+		t.Errorf("Expected empty URL for text request, got '%s'", req.URL)
+	}
+
+	if req.Status != StatusPending {
+		t.Errorf("Expected status %s, got %s", StatusPending, req.Status)
+	}
+
+	if req.Progress != 0 {
+		t.Errorf("Expected progress 0, got %d", req.Progress)
+	}
+
+	if req.ExpiresAt.Before(time.Now()) {
+		t.Error("Expected expiration in the future")
+	}
+}
+
+func TestCreateTextAlwaysCreatesNew(t *testing.T) {
+	manager := NewManager()
+	text := "Same text for both requests"
+
+	req1, isNew1 := manager.CreateText(text)
+	if !isNew1 {
+		t.Error("Expected first text request to be new")
+	}
+
+	req2, isNew2 := manager.CreateText(text)
+	if !isNew2 {
+		t.Error("Expected second text request to also be new (no deduplication)")
+	}
+
+	if req1.ID == req2.ID {
+		t.Error("Expected different IDs for duplicate text requests")
+	}
+
+	// Verify both exist in the manager
+	requests := manager.List()
+	if len(requests) != 2 {
+		t.Errorf("Expected 2 requests, got %d", len(requests))
+	}
+}
+
+func TestDeleteTextRequest(t *testing.T) {
+	manager := NewManager()
+	text := "Test text"
+
+	req, _ := manager.CreateText(text)
+
+	success := manager.Delete(req.ID)
+	if !success {
+		t.Error("Expected delete to succeed")
+	}
+
+	_, exists := manager.Get(req.ID)
+	if exists {
+		t.Error("Expected text request to be deleted")
+	}
+
+	// Verify we can create a new text request after deletion
+	newReq, isNew := manager.CreateText(text)
+	if !isNew {
+		t.Error("Expected to create new text request after deletion")
+	}
+
+	if newReq.ID == req.ID {
+		t.Error("Expected new text request to have different ID")
+	}
+}
+
+func TestMixedURLAndTextRequests(t *testing.T) {
+	manager := NewManager()
+
+	urlReq, _ := manager.Create("https://example.com")
+	textReq, _ := manager.CreateText("Some text")
+
+	requests := manager.List()
+	if len(requests) != 2 {
+		t.Errorf("Expected 2 requests, got %d", len(requests))
+	}
+
+	// Verify URL request
+	url, exists := manager.Get(urlReq.ID)
+	if !exists {
+		t.Fatal("Expected URL request to exist")
+	}
+	if url.SourceType != "url" {
+		t.Errorf("Expected SourceType 'url', got '%s'", url.SourceType)
+	}
+
+	// Verify text request
+	text, exists := manager.Get(textReq.ID)
+	if !exists {
+		t.Fatal("Expected text request to exist")
+	}
+	if text.SourceType != "text" {
+		t.Errorf("Expected SourceType 'text', got '%s'", text.SourceType)
+	}
+
+	// Delete text request and verify URL request still exists
+	manager.Delete(textReq.ID)
+
+	_, exists = manager.Get(urlReq.ID)
+	if !exists {
+		t.Error("Expected URL request to still exist after deleting text request")
+	}
+}
+
+func TestTextRequestOperations(t *testing.T) {
+	manager := NewManager()
+	text := "Test text for operations"
+
+	req, _ := manager.CreateText(text)
+
+	// Test update status
+	manager.UpdateStatus(req.ID, StatusProcessing, 50)
+	updated, _ := manager.Get(req.ID)
+	if updated.Status != StatusProcessing {
+		t.Errorf("Expected status %s, got %s", StatusProcessing, updated.Status)
+	}
+	if updated.Progress != 50 {
+		t.Errorf("Expected progress 50, got %d", updated.Progress)
+	}
+
+	// Test set completed
+	resultID := "test-result-id"
+	manager.SetCompleted(req.ID, resultID)
+	completed, _ := manager.Get(req.ID)
+	if completed.Status != StatusCompleted {
+		t.Errorf("Expected status %s, got %s", StatusCompleted, completed.Status)
+	}
+	if completed.ResultRequestID != resultID {
+		t.Errorf("Expected ResultRequestID '%s', got '%s'", resultID, completed.ResultRequestID)
+	}
+}
+
+func TestTextRequestRetry(t *testing.T) {
+	manager := NewManager()
+	text := "Test text for retry"
+
+	req, _ := manager.CreateText(text)
+	manager.SetFailed(req.ID, "Test error")
+
+	success := manager.Retry(req.ID)
+	if !success {
+		t.Fatal("Expected retry to succeed for text request")
+	}
+
+	retried, exists := manager.Get(req.ID)
+	if !exists {
+		t.Fatal("Expected text request to exist after retry")
+	}
+
+	if retried.Status != StatusPending {
+		t.Errorf("Expected status %s, got %s", StatusPending, retried.Status)
+	}
+
+	if retried.ErrorMessage != "" {
+		t.Error("Expected error message to be cleared after retry")
+	}
+}

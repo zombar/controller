@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,6 +49,10 @@ func mockScraperServer() *httptest.Server {
 				score = 0.3
 				reason = "Social media platform - not suitable for ingestion"
 				categories = []string{"social_media"}
+			} else if strings.HasSuffix(req.URL, ".jpg") || strings.HasSuffix(req.URL, ".png") || strings.HasSuffix(req.URL, ".gif") {
+				score = 0.0
+				reason = "Image file detected - skipping content scoring"
+				categories = []string{"image", "media"}
 			}
 
 			response := clients.ScoreResponse{
@@ -640,6 +645,74 @@ func TestScrapeURLWithHighScore(t *testing.T) {
 	}
 }
 
+func TestScrapeURLWithImageURL(t *testing.T) {
+	handler, _, _, cleanup := setupTestHandler(t)
+	defer cleanup()
+
+	reqBody := ScrapeURLRequest{
+		URL: "https://example.com/photo.jpg",
+	}
+	jsonData, _ := json.Marshal(reqBody)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/scrape", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ScrapeURL(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("Expected status 201, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var response ControllerResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	// Image URLs should bypass threshold check and get fully scraped
+	if response.ScraperUUID == nil {
+		t.Error("Expected scraper UUID to be set for image URL (should bypass threshold)")
+	}
+
+	// Text analyzer should be skipped for image URLs
+	if response.TextAnalyzerUUID != "" {
+		t.Error("Expected analyzer UUID to be empty for image URL (text analysis should be skipped)")
+	}
+
+	// Check that metadata contains link_score with image category
+	metadata := response.Metadata
+	linkScore, ok := metadata["link_score"].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected link_score in metadata")
+	}
+
+	if linkScore["score"].(float64) != 0.0 {
+		t.Errorf("Expected link score 0.0 for image URL, got %v", linkScore["score"])
+	}
+
+	categories, ok := linkScore["categories"].([]interface{})
+	if !ok {
+		t.Fatal("Expected categories in link_score")
+	}
+
+	hasImageCategory := false
+	for _, cat := range categories {
+		if cat.(string) == "image" {
+			hasImageCategory = true
+			break
+		}
+	}
+
+	if !hasImageCategory {
+		t.Error("Expected 'image' category in link score")
+	}
+
+	// Should NOT have below_threshold flag since image URLs bypass threshold
+	if metadata["below_threshold"] == true {
+		t.Error("Expected below_threshold to be false/absent for image URL (should bypass threshold)")
+	}
+}
+
 func TestExtractLinks(t *testing.T) {
 	handler, _, _, cleanup := setupTestHandler(t)
 	defer cleanup()
@@ -1138,5 +1211,257 @@ func TestGetDocumentImages(t *testing.T) {
 				tt.checkResponse(t, w.Body.Bytes())
 			}
 		})
+	}
+}
+
+func TestTombstoneRequest(t *testing.T) {
+	scraperServer := mockScraperServer()
+	defer scraperServer.Close()
+
+	textanalyzerServer := mockTextAnalyzerServer()
+	defer textanalyzerServer.Close()
+
+	dbPath := "test_tombstone_request.db"
+	defer os.Remove(dbPath)
+
+	store, err := storage.New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	scraper := clients.NewScraperClient(scraperServer.URL)
+	textAnalyzer := clients.NewTextAnalyzerClient(textanalyzerServer.URL)
+
+	handler := &Handler{
+		storage:            store,
+		scraper:            scraper,
+		textAnalyzer:       textAnalyzer,
+		linkScoreThreshold: 0.5,
+	}
+
+	// First, create a request to tombstone
+	req := &storage.Request{
+		ID:               "tombstone-req-1",
+		CreatedAt:        time.Now().UTC(),
+		SourceType:       "text",
+		TextAnalyzerUUID: "analyzer-1",
+		Tags:             []string{"test"},
+		Metadata:         map[string]interface{}{},
+	}
+	if err := store.SaveRequest(req); err != nil {
+		t.Fatalf("Failed to save request: %v", err)
+	}
+
+	// Tombstone the request
+	r := httptest.NewRequest(http.MethodPut, "/api/requests/tombstone-req-1/tombstone", nil)
+	w := httptest.NewRecorder()
+
+	handler.TombstoneRequest(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d. Body: %s", w.Code, w.Body.String())
+	}
+
+	// Verify the request has tombstone_datetime in metadata
+	retrieved, err := store.GetRequest("tombstone-req-1")
+	if err != nil {
+		t.Fatalf("Failed to get request: %v", err)
+	}
+
+	if retrieved.Metadata["tombstone_datetime"] == nil {
+		t.Error("Expected tombstone_datetime in metadata")
+	}
+}
+
+func TestTombstoneRequestNotFound(t *testing.T) {
+	scraperServer := mockScraperServer()
+	defer scraperServer.Close()
+
+	textanalyzerServer := mockTextAnalyzerServer()
+	defer textanalyzerServer.Close()
+
+	dbPath := "test_tombstone_notfound.db"
+	defer os.Remove(dbPath)
+
+	store, err := storage.New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	scraper := clients.NewScraperClient(scraperServer.URL)
+	textAnalyzer := clients.NewTextAnalyzerClient(textanalyzerServer.URL)
+
+	handler := &Handler{
+		storage:            store,
+		scraper:            scraper,
+		textAnalyzer:       textAnalyzer,
+		linkScoreThreshold: 0.5,
+	}
+
+	r := httptest.NewRequest(http.MethodPut, "/api/requests/non-existent/tombstone", nil)
+	w := httptest.NewRecorder()
+
+	handler.TombstoneRequest(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d. Body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUntombstoneRequest(t *testing.T) {
+	scraperServer := mockScraperServer()
+	defer scraperServer.Close()
+
+	textanalyzerServer := mockTextAnalyzerServer()
+	defer textanalyzerServer.Close()
+
+	dbPath := "test_untombstone_request.db"
+	defer os.Remove(dbPath)
+
+	store, err := storage.New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	scraper := clients.NewScraperClient(scraperServer.URL)
+	textAnalyzer := clients.NewTextAnalyzerClient(textanalyzerServer.URL)
+
+	handler := &Handler{
+		storage:            store,
+		scraper:            scraper,
+		textAnalyzer:       textAnalyzer,
+		linkScoreThreshold: 0.5,
+	}
+
+	// Create a request with tombstone_datetime
+	req := &storage.Request{
+		ID:               "untombstone-req-1",
+		CreatedAt:        time.Now().UTC(),
+		SourceType:       "text",
+		TextAnalyzerUUID: "analyzer-1",
+		Tags:             []string{"test"},
+		Metadata: map[string]interface{}{
+			"tombstone_datetime": time.Now().UTC().Format(time.RFC3339),
+		},
+	}
+	if err := store.SaveRequest(req); err != nil {
+		t.Fatalf("Failed to save request: %v", err)
+	}
+
+	// Untombstone the request
+	r := httptest.NewRequest(http.MethodDelete, "/api/requests/untombstone-req-1/tombstone", nil)
+	w := httptest.NewRecorder()
+
+	handler.UntombstoneRequest(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d. Body: %s", w.Code, w.Body.String())
+	}
+
+	// Verify tombstone_datetime was removed
+	retrieved, err := store.GetRequest("untombstone-req-1")
+	if err != nil {
+		t.Fatalf("Failed to get request: %v", err)
+	}
+
+	if retrieved.Metadata["tombstone_datetime"] != nil {
+		t.Error("Expected tombstone_datetime to be removed from metadata")
+	}
+}
+
+func TestDeleteRequest(t *testing.T) {
+	scraperServer := mockScraperServer()
+	defer scraperServer.Close()
+
+	textanalyzerServer := mockTextAnalyzerServer()
+	defer textanalyzerServer.Close()
+
+	dbPath := "test_delete_request.db"
+	defer os.Remove(dbPath)
+
+	store, err := storage.New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	scraper := clients.NewScraperClient(scraperServer.URL)
+	textAnalyzer := clients.NewTextAnalyzerClient(textanalyzerServer.URL)
+
+	handler := &Handler{
+		storage:            store,
+		scraper:            scraper,
+		textAnalyzer:       textAnalyzer,
+		linkScoreThreshold: 0.5,
+	}
+
+	// Create a request to delete
+	req := &storage.Request{
+		ID:               "delete-req-1",
+		CreatedAt:        time.Now().UTC(),
+		SourceType:       "text",
+		TextAnalyzerUUID: "analyzer-1",
+		Tags:             []string{"test"},
+	}
+	if err := store.SaveRequest(req); err != nil {
+		t.Fatalf("Failed to save request: %v", err)
+	}
+
+	// Delete the request
+	r := httptest.NewRequest(http.MethodDelete, "/api/requests/delete-req-1", nil)
+	w := httptest.NewRecorder()
+
+	handler.DeleteRequest(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d. Body: %s", w.Code, w.Body.String())
+	}
+
+	// Verify request no longer exists
+	_, err = store.GetRequest("delete-req-1")
+	if err == nil {
+		t.Error("Expected error for deleted request")
+	}
+	if err.Error() != "request not found" {
+		t.Errorf("Expected 'request not found' error, got: %v", err)
+	}
+}
+
+func TestDeleteRequestNotFound(t *testing.T) {
+	scraperServer := mockScraperServer()
+	defer scraperServer.Close()
+
+	textanalyzerServer := mockTextAnalyzerServer()
+	defer textanalyzerServer.Close()
+
+	dbPath := "test_delete_notfound.db"
+	defer os.Remove(dbPath)
+
+	store, err := storage.New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	scraper := clients.NewScraperClient(scraperServer.URL)
+	textAnalyzer := clients.NewTextAnalyzerClient(textanalyzerServer.URL)
+
+	handler := &Handler{
+		storage:            store,
+		scraper:            scraper,
+		textAnalyzer:       textAnalyzer,
+		linkScoreThreshold: 0.5,
+	}
+
+	r := httptest.NewRequest(http.MethodDelete, "/api/requests/non-existent", nil)
+	w := httptest.NewRecorder()
+
+	handler.DeleteRequest(w, r)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("Expected status 404, got %d. Body: %s", w.Code, w.Body.String())
 	}
 }

@@ -77,12 +77,13 @@ func (c *ScraperClient) Scrape(url string) (*ScraperResponse, error) {
 
 // ImageInfo represents image data from the scraper service
 type ImageInfo struct {
-	ID         string   `json:"id,omitempty"`
-	URL        string   `json:"url"`
-	AltText    string   `json:"alt_text"`
-	Summary    string   `json:"summary"`
-	Tags       []string `json:"tags"`
-	Base64Data string   `json:"base64_data,omitempty"`
+	ID                string     `json:"id,omitempty"`
+	URL               string     `json:"url"`
+	AltText           string     `json:"alt_text"`
+	Summary           string     `json:"summary"`
+	Tags              []string   `json:"tags"`
+	Base64Data        string     `json:"base64_data,omitempty"`
+	TombstoneDatetime *time.Time `json:"tombstone_datetime,omitempty"`
 }
 
 // ImageSearchRequest represents a request to search images by tags
@@ -156,6 +157,33 @@ func (c *ScraperClient) GetImagesByScrapeID(scrapeID string) (*ImageSearchRespon
 	}
 
 	return &searchResp, nil
+}
+
+// GetImageByID retrieves a single image by ID from the scraper service
+func (c *ScraperClient) GetImageByID(imageID string) (*ImageInfo, error) {
+	resp, err := c.httpClient.Get(
+		fmt.Sprintf("%s/api/images/%s", c.baseURL, imageID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to send request to scraper: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("scraper service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var image ImageInfo
+	if err := json.Unmarshal(body, &image); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return &image, nil
 }
 
 // LinkScore represents a scored link with quality assessment
@@ -260,6 +288,106 @@ func (c *ScraperClient) ExtractLinks(url string) (*ExtractLinksResponse, error) 
 	}
 
 	return &extractResp, nil
+}
+
+// DeleteScrape deletes a scrape by ID
+func (c *ScraperClient) DeleteScrape(scrapeID string) error {
+	req, err := http.NewRequest(
+		http.MethodDelete,
+		fmt.Sprintf("%s/api/scrapes/%s", c.baseURL, scrapeID),
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request to scraper: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("scraper service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// DeleteImage deletes an image by ID
+func (c *ScraperClient) DeleteImage(imageID string) error {
+	req, err := http.NewRequest(
+		http.MethodDelete,
+		fmt.Sprintf("%s/api/images/%s", c.baseURL, imageID),
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request to scraper: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("scraper service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// TombstoneImage tombstones an image by ID
+func (c *ScraperClient) TombstoneImage(imageID string) error {
+	req, err := http.NewRequest(
+		http.MethodPut,
+		fmt.Sprintf("%s/api/images/%s/tombstone", c.baseURL, imageID),
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request to scraper: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("scraper service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// UntombstoneImage removes tombstone from an image by ID
+func (c *ScraperClient) UntombstoneImage(imageID string) error {
+	req, err := http.NewRequest(
+		http.MethodDelete,
+		fmt.Sprintf("%s/api/images/%s/tombstone", c.baseURL, imageID),
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request to scraper: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("scraper service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }
 
 // PageMetadata represents metadata about a scraped page

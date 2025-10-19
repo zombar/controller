@@ -20,7 +20,9 @@ const (
 // ScrapeRequest represents an in-memory scrape request
 type ScrapeRequest struct {
 	ID               string              `json:"id"`
-	URL              string              `json:"url"`
+	SourceType       string              `json:"source_type"`         // "url" or "text"
+	URL              string              `json:"url,omitempty"`       // For URL requests
+	Text             string              `json:"text,omitempty"`      // For text requests
 	Status           ScrapeRequestStatus `json:"status"`
 	Progress         int                 `json:"progress"` // 0-100
 	CreatedAt        time.Time           `json:"created_at"`
@@ -68,17 +70,42 @@ func (m *Manager) Create(url string) (*ScrapeRequest, bool) {
 	// Create new request
 	now := time.Now()
 	req := &ScrapeRequest{
-		ID:        uuid.New().String(),
-		URL:       url,
-		Status:    StatusPending,
-		Progress:  0,
-		CreatedAt: now,
-		UpdatedAt: now,
-		ExpiresAt: now.Add(15 * time.Minute),
+		ID:         uuid.New().String(),
+		SourceType: "url",
+		URL:        url,
+		Status:     StatusPending,
+		Progress:   0,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		ExpiresAt:  now.Add(15 * time.Minute),
 	}
 
 	m.requests[req.ID] = req
 	m.urlMap[url] = req.ID
+
+	return req, true
+}
+
+// CreateText creates a new text analysis request
+// Text requests are always created fresh (no duplicate detection)
+func (m *Manager) CreateText(text string) (*ScrapeRequest, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Create new request
+	now := time.Now()
+	req := &ScrapeRequest{
+		ID:         uuid.New().String(),
+		SourceType: "text",
+		Text:       text,
+		Status:     StatusPending,
+		Progress:   0,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		ExpiresAt:  now.Add(15 * time.Minute),
+	}
+
+	m.requests[req.ID] = req
 
 	return req, true
 }
@@ -167,8 +194,10 @@ func (m *Manager) Delete(id string) bool {
 		return false
 	}
 
-	// Remove from URL map
-	delete(m.urlMap, req.URL)
+	// Remove from URL map if it's a URL request
+	if req.SourceType == "url" && req.URL != "" {
+		delete(m.urlMap, req.URL)
+	}
 
 	// Remove from requests map
 	delete(m.requests, id)
@@ -204,7 +233,10 @@ func (m *Manager) cleanupExpired() {
 
 		for id, req := range m.requests {
 			if now.After(req.ExpiresAt) {
-				delete(m.urlMap, req.URL)
+				// Remove from URL map if it's a URL request
+				if req.SourceType == "url" && req.URL != "" {
+					delete(m.urlMap, req.URL)
+				}
 				delete(m.requests, id)
 			}
 		}
