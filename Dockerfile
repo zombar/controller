@@ -1,8 +1,8 @@
 # Multi-stage build for optimal image size
 FROM golang:1.24-alpine AS builder
 
-# Install build dependencies (CGO required for SQLite)
-RUN apk add --no-cache git ca-certificates tzdata gcc musl-dev sqlite-dev
+# Install minimal build dependencies (no CGO needed with modernc.org/sqlite)
+RUN apk add --no-cache git ca-certificates tzdata
 
 # Set working directory
 WORKDIR /build
@@ -14,14 +14,14 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the binary with CGO enabled for SQLite support
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -ldflags="-w -s" -o controller ./cmd/controller
+# Build the binary (CGO disabled for pure Go)
+RUN CGO_ENABLED=0 GOOS=linux go build -a -ldflags="-w -s" -o controller ./cmd/controller
 
 # Final stage
-FROM alpine:latest
+FROM alpine:3.20
 
-# Install runtime dependencies
-RUN apk --no-cache add ca-certificates sqlite-libs
+# Install minimal runtime dependencies
+RUN apk --no-cache add ca-certificates
 
 # Create non-root user
 RUN addgroup -g 1000 controller && \

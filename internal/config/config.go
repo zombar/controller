@@ -13,6 +13,7 @@ type Config struct {
 	Port                int
 	DatabasePath        string
 	LinkScoreThreshold  float64 // Minimum score for link recommendation (0.0-1.0)
+	GenerateMockData    bool    // Generate 14 days of mock historical data on startup
 }
 
 // Load reads configuration from environment variables
@@ -23,6 +24,7 @@ func Load() (*Config, error) {
 		Port:                getEnvAsInt("CONTROLLER_PORT", 8080),
 		DatabasePath:        getEnv("DATABASE_PATH", "./controller.db"),
 		LinkScoreThreshold:  getEnvAsFloat("LINK_SCORE_THRESHOLD", 0.5),
+		GenerateMockData:    getEnvAsBool("GENERATE_MOCK_DATA", false),
 	}
 
 	if err := config.Validate(); err != nil {
@@ -78,6 +80,18 @@ func getEnvAsFloat(key string, defaultValue float64) float64 {
 		return defaultValue
 	}
 	value, err := strconv.ParseFloat(valueStr, 64)
+	if err != nil {
+		return defaultValue
+	}
+	return value
+}
+
+func getEnvAsBool(key string, defaultValue bool) bool {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	value, err := strconv.ParseBool(valueStr)
 	if err != nil {
 		return defaultValue
 	}
