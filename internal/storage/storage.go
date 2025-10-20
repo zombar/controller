@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
@@ -309,4 +311,160 @@ func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 	}
 
 	return requests, nil
+}
+
+// GenerateMockData generates 14 days of realistic historical data for testing
+func (s *Storage) GenerateMockData() error {
+	log.Println("Generating mock historical data...")
+
+	// Check if we already have data
+	var count int
+	err := s.db.QueryRow("SELECT COUNT(*) FROM requests").Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to count existing requests: %w", err)
+	}
+
+	if count > 0 {
+		log.Printf("Database already contains %d requests, skipping mock data generation", count)
+		return nil
+	}
+
+	// Sample data for generating realistic entries
+	sampleURLs := []string{
+		"https://example.com/article/technology-trends-2024",
+		"https://news.example.org/science/quantum-computing-breakthrough",
+		"https://blog.example.net/programming/golang-best-practices",
+		"https://research.example.edu/papers/artificial-intelligence",
+		"https://docs.example.io/guides/docker-deployment",
+		"https://medium.example.com/data-science/machine-learning-basics",
+		"https://github.example.dev/projects/open-source-tools",
+		"https://stackoverflow.example.com/questions/database-optimization",
+		"https://arxiv.example.org/papers/distributed-systems",
+		"https://dev.example.to/tutorials/kubernetes-intro",
+	}
+
+	sampleTags := [][]string{
+		{"technology", "trends", "future"},
+		{"science", "quantum", "research"},
+		{"programming", "golang", "best-practices"},
+		{"ai", "machine-learning", "research"},
+		{"devops", "docker", "deployment"},
+		{"data-science", "ml", "tutorial"},
+		{"open-source", "tools", "development"},
+		{"database", "optimization", "performance"},
+		{"distributed-systems", "architecture", "scalability"},
+		{"kubernetes", "containers", "cloud"},
+	}
+
+	sampleTitles := []string{
+		"Technology Trends to Watch in 2024",
+		"Breakthrough in Quantum Computing Research",
+		"Go Programming Best Practices",
+		"Advances in Artificial Intelligence",
+		"Docker Deployment Strategies",
+		"Machine Learning Fundamentals",
+		"Top Open Source Development Tools",
+		"Database Optimization Techniques",
+		"Distributed Systems Architecture",
+		"Getting Started with Kubernetes",
+	}
+
+	sampleAuthors := []string{
+		"Dr. Jane Smith",
+		"Prof. John Doe",
+		"Alice Johnson",
+		"Bob Wilson",
+		"Carol Martinez",
+		"David Chen",
+		"Emma Brown",
+		"Frank Taylor",
+		"Grace Lee",
+		"Henry Anderson",
+	}
+
+	// Generate 75 mock requests spanning 14 days
+	now := time.Now()
+	mockCount := 75
+	rand.Seed(now.UnixNano())
+
+	for i := 0; i < mockCount; i++ {
+		// Random timestamp within the last 14 days
+		daysAgo := rand.Float64() * 14
+		hoursAgo := daysAgo * 24
+		createdAt := now.Add(-time.Duration(hoursAgo) * time.Hour)
+
+		// Randomly choose between URL scrape (70%) and text ingestion (30%)
+		isURL := rand.Float64() < 0.7
+		idx := rand.Intn(len(sampleURLs))
+
+		var sourceType string
+		var sourceURL *string
+		var scraperUUID *string
+
+		if isURL {
+			sourceType = "url"
+			url := sampleURLs[idx]
+			sourceURL = &url
+			scraperUUIDStr := uuid.New().String()
+			scraperUUID = &scraperUUIDStr
+		} else {
+			sourceType = "text"
+		}
+
+		// Generate metadata with varying quality scores and occasional tombstones
+		metadata := make(map[string]interface{})
+
+		// Link score (quality): higher quality more likely
+		qualityScore := 0.3 + rand.Float64()*0.7 // Range 0.3-1.0
+
+		metadata["link_score"] = map[string]interface{}{
+			"score": qualityScore,
+		}
+
+		// Add scraper metadata for URL sources
+		if isURL {
+			scraperMetadata := map[string]interface{}{
+				"title":        sampleTitles[idx],
+				"author":       sampleAuthors[rand.Intn(len(sampleAuthors))],
+				"publish_date": createdAt.Format(time.RFC3339),
+			}
+
+			// 30% chance of having images
+			if rand.Float64() < 0.3 {
+				scraperMetadata["images"] = []map[string]interface{}{
+					{
+						"url":      fmt.Sprintf("https://example.com/images/%s.jpg", uuid.New().String()[:8]),
+						"alt_text": sampleTitles[idx],
+					},
+				}
+			}
+
+			metadata["scraper_metadata"] = scraperMetadata
+		}
+
+		// 15% chance of being tombstoned
+		if rand.Float64() < 0.15 {
+			tombstoneTime := createdAt.Add(time.Duration(rand.Intn(72)) * time.Hour) // Tombstoned 0-3 days after creation
+			metadata["tombstone_datetime"] = tombstoneTime.Format(time.RFC3339)
+		}
+
+		// Create request
+		req := &Request{
+			ID:               uuid.New().String(),
+			CreatedAt:        createdAt,
+			SourceType:       sourceType,
+			SourceURL:        sourceURL,
+			ScraperUUID:      scraperUUID,
+			TextAnalyzerUUID: uuid.New().String(),
+			Tags:             sampleTags[idx],
+			Metadata:         metadata,
+		}
+
+		if err := s.SaveRequest(req); err != nil {
+			return fmt.Errorf("failed to save mock request: %w", err)
+		}
+	}
+
+	log.Printf("✓ Generated %d mock requests spanning 14 days", mockCount)
+	return nil
 }

@@ -48,6 +48,14 @@ func main() {
 	}
 	defer store.Close()
 
+	// Generate mock data if enabled
+	if cfg.GenerateMockData {
+		log.Println("Mock data generation enabled")
+		if err := store.GenerateMockData(); err != nil {
+			log.Printf("Warning: Failed to generate mock data: %v", err)
+		}
+	}
+
 	// Initialize clients
 	scraperClient := clients.NewScraperClient(cfg.ScraperBaseURL)
 	textAnalyzerClient := clients.NewTextAnalyzerClient(cfg.TextAnalyzerBaseURL)
