@@ -266,6 +266,125 @@ func (s *Storage) SearchByTags(searchTags []string, fuzzy bool) ([]string, error
 	return requestIDs, nil
 }
 
+// FilterOptions contains all filter parameters for requests
+type FilterOptions struct {
+	Tags       []string
+	Fuzzy      bool
+	DateStart  *time.Time
+	DateEnd    *time.Time
+	SourceType *string
+	Limit      int
+	Offset     int
+}
+
+// FilterRequests filters requests based on multiple criteria
+func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
+	// Build the WHERE clause dynamically
+	var whereClauses []string
+	var args []interface{}
+
+	// Date range filter
+	if opts.DateStart != nil {
+		whereClauses = append(whereClauses, "r.created_at >= ?")
+		args = append(args, *opts.DateStart)
+	}
+	if opts.DateEnd != nil {
+		whereClauses = append(whereClauses, "r.created_at <= ?")
+		args = append(args, *opts.DateEnd)
+	}
+
+	// Source type filter
+	if opts.SourceType != nil {
+		whereClauses = append(whereClauses, "r.source_type = ?")
+		args = append(args, *opts.SourceType)
+	}
+
+	// Build base query
+	var query string
+	if len(opts.Tags) > 0 {
+		// If tags are specified, join with tags table
+		var tagConditions []string
+		for _, tag := range opts.Tags {
+			if opts.Fuzzy {
+				tagConditions = append(tagConditions, "t.tag LIKE ?")
+				args = append(args, "%"+tag+"%")
+			} else {
+				tagConditions = append(tagConditions, "t.tag = ?")
+				args = append(args, tag)
+			}
+		}
+
+		// Use INNER JOIN to filter by tags
+		query = `
+			SELECT DISTINCT r.id, r.created_at, r.source_type, r.source_url, r.scraper_uuid, r.textanalyzer_uuid, r.tags_json, r.metadata_json
+			FROM requests r
+			INNER JOIN tags t ON r.id = t.request_id
+			WHERE (` + strings.Join(tagConditions, " OR ") + `)`
+
+		// Add other WHERE clauses
+		if len(whereClauses) > 0 {
+			query += " AND " + strings.Join(whereClauses, " AND ")
+		}
+	} else {
+		// No tags specified, query requests table directly
+		query = `
+			SELECT id, created_at, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json
+			FROM requests r`
+
+		if len(whereClauses) > 0 {
+			query += " WHERE " + strings.Join(whereClauses, " AND ")
+		}
+	}
+
+	// Add ORDER BY and pagination
+	query += " ORDER BY r.created_at DESC"
+	if opts.Limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, opts.Limit)
+	}
+	if opts.Offset > 0 {
+		query += " OFFSET ?"
+		args = append(args, opts.Offset)
+	}
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to filter requests: %w", err)
+	}
+	defer rows.Close()
+
+	var requests []*Request
+	for rows.Next() {
+		var req Request
+		var tagsJSON, metadataJSON sql.NullString
+
+		err := rows.Scan(&req.ID, &req.CreatedAt, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan request: %w", err)
+		}
+
+		if tagsJSON.Valid {
+			if err := json.Unmarshal([]byte(tagsJSON.String), &req.Tags); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal tags: %w", err)
+			}
+		}
+
+		if metadataJSON.Valid && metadataJSON.String != "" {
+			if err := json.Unmarshal([]byte(metadataJSON.String), &req.Metadata); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+			}
+		}
+
+		requests = append(requests, &req)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating rows: %w", err)
+	}
+
+	return requests, nil
+}
+
 // ListRequests returns all requests ordered by creation time
 func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 	query := `

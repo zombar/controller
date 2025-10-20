@@ -50,6 +50,17 @@ type SearchTagsRequest struct {
 	Fuzzy bool     `json:"fuzzy"`
 }
 
+// FilterRequestsRequest represents a request to filter requests
+type FilterRequestsRequest struct {
+	Tags       []string  `json:"tags,omitempty"`
+	Fuzzy      bool      `json:"fuzzy"`
+	DateStart  *string   `json:"date_start,omitempty"`
+	DateEnd    *string   `json:"date_end,omitempty"`
+	SourceType *string   `json:"source_type,omitempty"`
+	Limit      int       `json:"limit,omitempty"`
+	Offset     int       `json:"offset,omitempty"`
+}
+
 // ControllerResponse represents the response from the controller
 type ControllerResponse struct {
 	ID               string                 `json:"id"`
@@ -329,6 +340,87 @@ func (h *Handler) SearchTags(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
 		"request_ids": requestIDs,
 		"count":       len(requestIDs),
+	}
+
+	respondJSON(w, response, http.StatusOK)
+}
+
+// FilterRequests handles filtering requests with multiple criteria
+func (h *Handler) FilterRequests(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req FilterRequestsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Parse date strings to time.Time if provided
+	var dateStart, dateEnd *time.Time
+	if req.DateStart != nil && *req.DateStart != "" {
+		parsedStart, err := time.Parse(time.RFC3339, *req.DateStart)
+		if err != nil {
+			respondError(w, fmt.Sprintf("Invalid date_start format (use RFC3339): %v", err), http.StatusBadRequest)
+			return
+		}
+		dateStart = &parsedStart
+	}
+	if req.DateEnd != nil && *req.DateEnd != "" {
+		parsedEnd, err := time.Parse(time.RFC3339, *req.DateEnd)
+		if err != nil {
+			respondError(w, fmt.Sprintf("Invalid date_end format (use RFC3339): %v", err), http.StatusBadRequest)
+			return
+		}
+		dateEnd = &parsedEnd
+	}
+
+	// Set default limit if not specified
+	limit := req.Limit
+	if limit == 0 {
+		limit = 100
+	}
+
+	// Build filter options
+	opts := storage.FilterOptions{
+		Tags:       req.Tags,
+		Fuzzy:      req.Fuzzy,
+		DateStart:  dateStart,
+		DateEnd:    dateEnd,
+		SourceType: req.SourceType,
+		Limit:      limit,
+		Offset:     req.Offset,
+	}
+
+	// Filter requests
+	requests, err := h.storage.FilterRequests(opts)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to filter requests: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to response format
+	var responses []ControllerResponse
+	for _, record := range requests {
+		responses = append(responses, ControllerResponse{
+			ID:               record.ID,
+			CreatedAt:        record.CreatedAt,
+			SourceType:       record.SourceType,
+			SourceURL:        record.SourceURL,
+			ScraperUUID:      record.ScraperUUID,
+			TextAnalyzerUUID: record.TextAnalyzerUUID,
+			Tags:             record.Tags,
+			Metadata:         record.Metadata,
+		})
+	}
+
+	response := map[string]interface{}{
+		"requests": responses,
+		"count":    len(responses),
+		"limit":    limit,
+		"offset":   req.Offset,
 	}
 
 	respondJSON(w, response, http.StatusOK)

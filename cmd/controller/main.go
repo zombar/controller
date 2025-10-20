@@ -71,8 +71,15 @@ func main() {
 	mux.HandleFunc("/api/score", handler.ScoreLink)
 	mux.HandleFunc("/api/search", handler.SearchTags)
 	mux.HandleFunc("/api/images/search", handler.SearchImageTags)
+	mux.HandleFunc("/api/requests/filter", handler.FilterRequests)
 	mux.HandleFunc("/api/extract-links", handler.ExtractLinks)
 	mux.HandleFunc("/api/requests/", func(w http.ResponseWriter, r *http.Request) {
+		// Redirect /api/requests/filter to dedicated handler
+		if r.URL.Path == "/api/requests/filter" {
+			handler.FilterRequests(w, r)
+			return
+		}
+
 		// Handle /api/requests/{id}/tombstone
 		if len(r.URL.Path) > len("/api/requests/") && r.URL.Path[len(r.URL.Path)-10:] == "/tombstone" {
 			if r.Method == http.MethodPut {

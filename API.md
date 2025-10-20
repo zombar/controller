@@ -315,6 +315,92 @@ curl -X POST http://localhost:8080/search/tags \
 
 ---
 
+### Filter Requests
+
+Filter requests by multiple criteria including tags, date range, and source type.
+
+**Request:**
+```http
+POST /api/requests/filter
+Content-Type: application/json
+
+{
+  "tags": ["programming", "web"],
+  "fuzzy": true,
+  "date_start": "2024-01-01T00:00:00Z",
+  "date_end": "2024-01-31T23:59:59Z",
+  "source_type": "url",
+  "limit": 100,
+  "offset": 0
+}
+```
+
+**Parameters:**
+- `tags` (array of strings, optional) - Tags to filter by
+- `fuzzy` (boolean, optional) - Enable fuzzy tag matching (default: false)
+- `date_start` (string, optional) - Start date in RFC3339 format
+- `date_end` (string, optional) - End date in RFC3339 format
+- `source_type` (string, optional) - Filter by source type ("url" or "text")
+- `limit` (integer, optional) - Maximum number of results (default: 100)
+- `offset` (integer, optional) - Number of results to skip for pagination
+
+**Response:**
+```json
+{
+  "requests": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "created_at": "2024-01-15T14:30:00Z",
+      "source_type": "url",
+      "source_url": "https://example.com/article",
+      "scraper_uuid": "660e8400-e29b-41d4-a716-446655440001",
+      "textanalyzer_uuid": "770e8400-e29b-41d4-a716-446655440002",
+      "tags": ["programming", "web", "tutorial"],
+      "metadata": {
+        "scraper_metadata": {
+          "title": "Web Programming Tutorial"
+        }
+      }
+    }
+  ],
+  "count": 1,
+  "limit": 100,
+  "offset": 0
+}
+```
+
+**Example:**
+```bash
+# Filter by date range
+curl -X POST http://localhost:8080/api/requests/filter \
+  -H "Content-Type: application/json" \
+  -d '{
+    "date_start": "2024-01-01T00:00:00Z",
+    "date_end": "2024-01-31T23:59:59Z",
+    "limit": 50
+  }'
+
+# Filter by tags and date range
+curl -X POST http://localhost:8080/api/requests/filter \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tags": ["programming"],
+    "fuzzy": true,
+    "date_start": "2024-01-01T00:00:00Z",
+    "date_end": "2024-01-31T23:59:59Z"
+  }'
+
+# Filter by source type
+curl -X POST http://localhost:8080/api/requests/filter \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_type": "url",
+    "limit": 100
+  }'
+```
+
+---
+
 ### Search Images by Tags
 
 Search for images across all scraped content using fuzzy tag matching. This endpoint queries the scraper service for images with matching tags.
