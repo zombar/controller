@@ -1,7 +1,7 @@
 # Multi-stage build for optimal image size
 FROM golang:1.24-alpine AS builder
 
-# Install minimal build dependencies (no CGO needed with modernc.org/sqlite)
+# Install minimal build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
 
 # Set working directory
@@ -14,8 +14,8 @@ RUN go mod download
 # Copy source code
 COPY . .
 
-# Build the binary (CGO disabled for pure Go)
-RUN CGO_ENABLED=0 GOOS=linux go build -a -ldflags="-w -s" -o controller ./cmd/controller
+# Build the binary (pure Go with modernc.org/sqlite)
+RUN GOOS=linux go build -a -ldflags="-w -s" -o controller ./cmd/controller
 
 # Final stage
 FROM alpine:3.20
