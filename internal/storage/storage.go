@@ -432,7 +432,7 @@ func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 	return requests, nil
 }
 
-// GenerateMockData generates 14 days of realistic historical data for testing
+// GenerateMockData generates 6 months of realistic historical data for testing
 func (s *Storage) GenerateMockData() error {
 	log.Println("Generating mock historical data...")
 
@@ -501,14 +501,16 @@ func (s *Storage) GenerateMockData() error {
 		"Henry Anderson",
 	}
 
-	// Generate 75 mock requests spanning 14 days
+	// Generate 600 mock requests spanning 6 months (180 days)
+	// This averages to ~3.3 documents per day
 	now := time.Now()
-	mockCount := 75
+	mockCount := 600
+	daysToGenerate := 180.0
 	rand.Seed(now.UnixNano())
 
 	for i := 0; i < mockCount; i++ {
-		// Random timestamp within the last 14 days
-		daysAgo := rand.Float64() * 14
+		// Random timestamp within the last 6 months (180 days)
+		daysAgo := rand.Float64() * daysToGenerate
 		hoursAgo := daysAgo * 24
 		createdAt := now.Add(-time.Duration(hoursAgo) * time.Hour)
 
@@ -584,6 +586,6 @@ func (s *Storage) GenerateMockData() error {
 		}
 	}
 
-	log.Printf("✓ Generated %d mock requests spanning 14 days", mockCount)
+	log.Printf("✓ Generated %d mock requests spanning %.0f days (6 months)", mockCount, daysToGenerate)
 	return nil
 }

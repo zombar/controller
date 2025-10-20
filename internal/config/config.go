@@ -13,7 +13,7 @@ type Config struct {
 	Port                int
 	DatabasePath        string
 	LinkScoreThreshold  float64 // Minimum score for link recommendation (0.0-1.0)
-	GenerateMockData    bool    // Generate 14 days of mock historical data on startup
+	GenerateMockData    bool    // Generate 6 months of mock historical data on startup (~600 documents)
 }
 
 // Load reads configuration from environment variables
