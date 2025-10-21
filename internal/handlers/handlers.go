@@ -65,6 +65,7 @@ type FilterRequestsRequest struct {
 type ControllerResponse struct {
 	ID               string                 `json:"id"`
 	CreatedAt        time.Time              `json:"created_at"`
+	EffectiveDate    time.Time              `json:"effective_date"`
 	SourceType       string                 `json:"source_type"`
 	SourceURL        *string                `json:"source_url,omitempty"`
 	ScraperUUID      *string                `json:"scraper_uuid,omitempty"`
@@ -143,12 +144,13 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		}
 
 		response := ControllerResponse{
-			ID:         record.ID,
-			CreatedAt:  record.CreatedAt,
-			SourceType: record.SourceType,
-			SourceURL:  record.SourceURL,
-			Tags:       record.Tags,
-			Metadata:   record.Metadata,
+			ID:            record.ID,
+			CreatedAt:     record.CreatedAt,
+			EffectiveDate: record.EffectiveDate,
+			SourceType:    record.SourceType,
+			SourceURL:     record.SourceURL,
+			Tags:          record.Tags,
+			Metadata:      record.Metadata,
 		}
 
 		respondJSON(w, response, http.StatusCreated)
@@ -245,6 +247,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 	response := ControllerResponse{
 		ID:               record.ID,
 		CreatedAt:        record.CreatedAt,
+		EffectiveDate:    record.EffectiveDate,
 		SourceType:       record.SourceType,
 		SourceURL:        record.SourceURL,
 		ScraperUUID:      record.ScraperUUID,
@@ -304,6 +307,7 @@ func (h *Handler) AnalyzeText(w http.ResponseWriter, r *http.Request) {
 	response := ControllerResponse{
 		ID:               record.ID,
 		CreatedAt:        record.CreatedAt,
+		EffectiveDate:    record.EffectiveDate,
 		SourceType:       record.SourceType,
 		TextAnalyzerUUID: record.TextAnalyzerUUID,
 		Tags:             record.Tags,
@@ -407,6 +411,7 @@ func (h *Handler) FilterRequests(w http.ResponseWriter, r *http.Request) {
 		responses = append(responses, ControllerResponse{
 			ID:               record.ID,
 			CreatedAt:        record.CreatedAt,
+			EffectiveDate:    record.EffectiveDate,
 			SourceType:       record.SourceType,
 			SourceURL:        record.SourceURL,
 			ScraperUUID:      record.ScraperUUID,
@@ -421,6 +426,34 @@ func (h *Handler) FilterRequests(w http.ResponseWriter, r *http.Request) {
 		"count":    len(responses),
 		"limit":    limit,
 		"offset":   req.Offset,
+	}
+
+	respondJSON(w, response, http.StatusOK)
+}
+
+// GetTimelineExtents returns the earliest effective date from all documents.
+// This endpoint is optimized for timeline visualization and returns only the minimum date.
+// The client should compute maxDate as "now".
+func (h *Handler) GetTimelineExtents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	earliestDate, err := h.storage.GetTimelineExtents()
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to get timeline extents: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// If no documents exist, return a default (30 days ago)
+	if earliestDate == nil {
+		defaultDate := time.Now().AddDate(0, 0, -30)
+		earliestDate = &defaultDate
+	}
+
+	response := map[string]interface{}{
+		"earliest_date": earliestDate.Format(time.RFC3339),
 	}
 
 	respondJSON(w, response, http.StatusOK)
@@ -453,6 +486,7 @@ func (h *Handler) GetRequest(w http.ResponseWriter, r *http.Request) {
 	response := ControllerResponse{
 		ID:               record.ID,
 		CreatedAt:        record.CreatedAt,
+		EffectiveDate:    record.EffectiveDate,
 		SourceType:       record.SourceType,
 		SourceURL:        record.SourceURL,
 		ScraperUUID:      record.ScraperUUID,
@@ -701,6 +735,7 @@ func (h *Handler) ListRequests(w http.ResponseWriter, r *http.Request) {
 		responses = append(responses, ControllerResponse{
 			ID:               record.ID,
 			CreatedAt:        record.CreatedAt,
+			EffectiveDate:    record.EffectiveDate,
 			SourceType:       record.SourceType,
 			SourceURL:        record.SourceURL,
 			ScraperUUID:      record.ScraperUUID,

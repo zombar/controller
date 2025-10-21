@@ -80,6 +80,12 @@ func main() {
 			return
 		}
 
+		// Handle /api/requests/timeline-extents
+		if r.URL.Path == "/api/requests/timeline-extents" {
+			handler.GetTimelineExtents(w, r)
+			return
+		}
+
 		// Handle /api/requests/{id}/tombstone
 		if len(r.URL.Path) > len("/api/requests/") && r.URL.Path[len(r.URL.Path)-10:] == "/tombstone" {
 			if r.Method == http.MethodPut {

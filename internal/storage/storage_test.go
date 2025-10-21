@@ -405,3 +405,362 @@ func TestDeleteRequestNotFound(t *testing.T) {
 		t.Errorf("Expected 'request not found' error, got: %v", err)
 	}
 }
+
+func TestGetTimelineExtents(t *testing.T) {
+	t.Run("empty database", func(t *testing.T) {
+		dbPath := "test_timeline_extents_empty.db"
+		defer os.Remove(dbPath)
+
+		store, err := New(dbPath)
+		if err != nil {
+			t.Fatalf("Failed to create storage: %v", err)
+		}
+		defer store.Close()
+
+		earliestDate, err := store.GetTimelineExtents()
+		if err != nil {
+			t.Fatalf("Failed to get timeline extents: %v", err)
+		}
+
+		if earliestDate != nil {
+			t.Errorf("Expected nil for empty database, got %v", earliestDate)
+		}
+	})
+
+	t.Run("single document with publish_date", func(t *testing.T) {
+		dbPath := "test_timeline_extents_single.db"
+		defer os.Remove(dbPath)
+
+		store, err := New(dbPath)
+		if err != nil {
+			t.Fatalf("Failed to create storage: %v", err)
+		}
+		defer store.Close()
+
+		expectedDate := time.Date(2024, 1, 15, 10, 0, 0, 0, time.UTC)
+		sourceURL := "https://example.com/article"
+		scraperUUID := "scraper-1"
+
+		req := &Request{
+			ID:               "test-1",
+			CreatedAt:        time.Now().UTC(),
+			SourceType:       "url",
+			SourceURL:        &sourceURL,
+			ScraperUUID:      &scraperUUID,
+			TextAnalyzerUUID: "analyzer-1",
+			Tags:             []string{"test"},
+			Metadata: map[string]interface{}{
+				"scraper_metadata": map[string]interface{}{
+					"publish_date": expectedDate.Format(time.RFC3339),
+					"title":        "Test Article",
+				},
+			},
+		}
+
+		if err := store.SaveRequest(req); err != nil {
+			t.Fatalf("Failed to save request: %v", err)
+		}
+
+		earliestDate, err := store.GetTimelineExtents()
+		if err != nil {
+			t.Fatalf("Failed to get timeline extents: %v", err)
+		}
+
+		if earliestDate == nil {
+			t.Fatal("Expected date, got nil")
+		}
+
+		// Compare dates with some tolerance for precision
+		diff := earliestDate.Sub(expectedDate)
+		if diff < -time.Second || diff > time.Second {
+			t.Errorf("Expected date %v, got %v (diff: %v)", expectedDate, earliestDate, diff)
+		}
+	})
+
+	t.Run("multiple documents - earliest is in scraper_metadata", func(t *testing.T) {
+		dbPath := "test_timeline_extents_multiple.db"
+		defer os.Remove(dbPath)
+
+		store, err := New(dbPath)
+		if err != nil {
+			t.Fatalf("Failed to create storage: %v", err)
+		}
+		defer store.Close()
+
+		// Three documents with different dates
+		dates := []time.Time{
+			time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),  // Newest
+			time.Date(2024, 3, 15, 0, 0, 0, 0, time.UTC), // Middle
+			time.Date(2024, 1, 10, 0, 0, 0, 0, time.UTC), // Oldest (expected)
+		}
+
+		for i, date := range dates {
+			sourceURL := fmt.Sprintf("https://example.com/article-%d", i)
+			scraperUUID := fmt.Sprintf("scraper-%d", i)
+
+			req := &Request{
+				ID:               fmt.Sprintf("test-%d", i),
+				CreatedAt:        time.Now().UTC(),
+				SourceType:       "url",
+				SourceURL:        &sourceURL,
+				ScraperUUID:      &scraperUUID,
+				TextAnalyzerUUID: fmt.Sprintf("analyzer-%d", i),
+				Tags:             []string{"test"},
+				Metadata: map[string]interface{}{
+					"scraper_metadata": map[string]interface{}{
+						"publish_date": date.Format(time.RFC3339),
+					},
+				},
+			}
+
+			if err := store.SaveRequest(req); err != nil {
+				t.Fatalf("Failed to save request %d: %v", i, err)
+			}
+		}
+
+		earliestDate, err := store.GetTimelineExtents()
+		if err != nil {
+			t.Fatalf("Failed to get timeline extents: %v", err)
+		}
+
+		if earliestDate == nil {
+			t.Fatal("Expected date, got nil")
+		}
+
+		expectedDate := dates[2] // Oldest
+		diff := earliestDate.Sub(expectedDate)
+		if diff < -time.Second || diff > time.Second {
+			t.Errorf("Expected earliest date %v, got %v", expectedDate, earliestDate)
+		}
+	})
+
+	t.Run("date precedence - scraper_metadata.publish_date takes priority", func(t *testing.T) {
+		dbPath := "test_timeline_extents_precedence.db"
+		defer os.Remove(dbPath)
+
+		store, err := New(dbPath)
+		if err != nil {
+			t.Fatalf("Failed to create storage: %v", err)
+		}
+		defer store.Close()
+
+		expectedDate := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+		laterDate := time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC)
+		sourceURL := "https://example.com/article"
+		scraperUUID := "scraper-1"
+
+		req := &Request{
+			ID:               "test-precedence",
+			CreatedAt:        time.Now().UTC(),
+			SourceType:       "url",
+			SourceURL:        &sourceURL,
+			ScraperUUID:      &scraperUUID,
+			TextAnalyzerUUID: "analyzer-1",
+			Tags:             []string{"test"},
+			Metadata: map[string]interface{}{
+				"scraper_metadata": map[string]interface{}{
+					"publish_date":   expectedDate.Format(time.RFC3339), // Should take priority
+					"published_date": laterDate.Format(time.RFC3339),
+				},
+				"additional_metadata": map[string]interface{}{
+					"publish_date": laterDate.Format(time.RFC3339),
+					"date":         laterDate.Format(time.RFC3339),
+				},
+			},
+		}
+
+		if err := store.SaveRequest(req); err != nil {
+			t.Fatalf("Failed to save request: %v", err)
+		}
+
+		earliestDate, err := store.GetTimelineExtents()
+		if err != nil {
+			t.Fatalf("Failed to get timeline extents: %v", err)
+		}
+
+		if earliestDate == nil {
+			t.Fatal("Expected date, got nil")
+		}
+
+		diff := earliestDate.Sub(expectedDate)
+		if diff < -time.Second || diff > time.Second {
+			t.Errorf("Expected date %v (from scraper_metadata.publish_date), got %v", expectedDate, earliestDate)
+		}
+	})
+
+	t.Run("date precedence - falls back to additional_metadata.date", func(t *testing.T) {
+		dbPath := "test_timeline_extents_fallback.db"
+		defer os.Remove(dbPath)
+
+		store, err := New(dbPath)
+		if err != nil {
+			t.Fatalf("Failed to create storage: %v", err)
+		}
+		defer store.Close()
+
+		expectedDate := time.Date(2024, 2, 1, 0, 0, 0, 0, time.UTC)
+		sourceURL := "https://example.com/article"
+		scraperUUID := "scraper-1"
+
+		req := &Request{
+			ID:               "test-fallback",
+			CreatedAt:        time.Now().UTC(),
+			SourceType:       "url",
+			SourceURL:        &sourceURL,
+			ScraperUUID:      &scraperUUID,
+			TextAnalyzerUUID: "analyzer-1",
+			Tags:             []string{"test"},
+			Metadata: map[string]interface{}{
+				"additional_metadata": map[string]interface{}{
+					"date": expectedDate.Format(time.RFC3339), // Only this field exists
+				},
+			},
+		}
+
+		if err := store.SaveRequest(req); err != nil {
+			t.Fatalf("Failed to save request: %v", err)
+		}
+
+		earliestDate, err := store.GetTimelineExtents()
+		if err != nil {
+			t.Fatalf("Failed to get timeline extents: %v", err)
+		}
+
+		if earliestDate == nil {
+			t.Fatal("Expected date, got nil")
+		}
+
+		diff := earliestDate.Sub(expectedDate)
+		if diff < -time.Second || diff > time.Second {
+			t.Errorf("Expected date %v (from additional_metadata.date), got %v", expectedDate, earliestDate)
+		}
+	})
+
+	t.Run("date precedence - falls back to created_at", func(t *testing.T) {
+		dbPath := "test_timeline_extents_created_at.db"
+		defer os.Remove(dbPath)
+
+		store, err := New(dbPath)
+		if err != nil {
+			t.Fatalf("Failed to create storage: %v", err)
+		}
+		defer store.Close()
+
+		expectedDate := time.Date(2024, 2, 1, 10, 30, 0, 0, time.UTC)
+		sourceURL := "https://example.com/article"
+		scraperUUID := "scraper-1"
+
+		req := &Request{
+			ID:               "test-created-at",
+			CreatedAt:        expectedDate,
+			SourceType:       "url",
+			SourceURL:        &sourceURL,
+			ScraperUUID:      &scraperUUID,
+			TextAnalyzerUUID: "analyzer-1",
+			Tags:             []string{"test"},
+			Metadata:         map[string]interface{}{}, // No date fields in metadata
+		}
+
+		if err := store.SaveRequest(req); err != nil {
+			t.Fatalf("Failed to save request: %v", err)
+		}
+
+		earliestDate, err := store.GetTimelineExtents()
+		if err != nil {
+			t.Fatalf("Failed to get timeline extents: %v", err)
+		}
+
+		if earliestDate == nil {
+			t.Fatal("Expected date, got nil")
+		}
+
+		diff := earliestDate.Sub(expectedDate)
+		if diff < -time.Second || diff > time.Second {
+			t.Errorf("Expected date %v (from created_at), got %v", expectedDate, earliestDate)
+		}
+	})
+
+	t.Run("mixed metadata structures", func(t *testing.T) {
+		dbPath := "test_timeline_extents_mixed.db"
+		defer os.Remove(dbPath)
+
+		store, err := New(dbPath)
+		if err != nil {
+			t.Fatalf("Failed to create storage: %v", err)
+		}
+		defer store.Close()
+
+		// Create requests with different metadata structures
+		// Document 1: Has scraper_metadata.publish_date (March 1)
+		sourceURL1 := "https://example.com/article-1"
+		scraperUUID1 := "scraper-1"
+		req1 := &Request{
+			ID:               "test-mixed-1",
+			CreatedAt:        time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC),
+			SourceType:       "url",
+			SourceURL:        &sourceURL1,
+			ScraperUUID:      &scraperUUID1,
+			TextAnalyzerUUID: "analyzer-1",
+			Tags:             []string{"test"},
+			Metadata: map[string]interface{}{
+				"scraper_metadata": map[string]interface{}{
+					"publish_date": time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+				},
+			},
+		}
+
+		// Document 2: Only has additional_metadata.date (January 15 - should be earliest)
+		sourceURL2 := "https://example.com/article-2"
+		scraperUUID2 := "scraper-2"
+		req2 := &Request{
+			ID:               "test-mixed-2",
+			CreatedAt:        time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC),
+			SourceType:       "url",
+			SourceURL:        &sourceURL2,
+			ScraperUUID:      &scraperUUID2,
+			TextAnalyzerUUID: "analyzer-2",
+			Tags:             []string{"test"},
+			Metadata: map[string]interface{}{
+				"additional_metadata": map[string]interface{}{
+					"date": time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+				},
+			},
+		}
+
+		// Document 3: No metadata dates, only created_at (April 1)
+		sourceURL3 := "https://example.com/article-3"
+		scraperUUID3 := "scraper-3"
+		req3 := &Request{
+			ID:               "test-mixed-3",
+			CreatedAt:        time.Date(2024, 4, 1, 0, 0, 0, 0, time.UTC),
+			SourceType:       "url",
+			SourceURL:        &sourceURL3,
+			ScraperUUID:      &scraperUUID3,
+			TextAnalyzerUUID: "analyzer-3",
+			Tags:             []string{"test"},
+			Metadata:         map[string]interface{}{},
+		}
+
+		for _, req := range []*Request{req1, req2, req3} {
+			if err := store.SaveRequest(req); err != nil {
+				t.Fatalf("Failed to save request %s: %v", req.ID, err)
+			}
+		}
+
+		earliestDate, err := store.GetTimelineExtents()
+		if err != nil {
+			t.Fatalf("Failed to get timeline extents: %v", err)
+		}
+
+		if earliestDate == nil {
+			t.Fatal("Expected date, got nil")
+		}
+
+		// Should be January 15 from req2's additional_metadata.date
+		expectedDate := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
+		diff := earliestDate.Sub(expectedDate)
+		if diff < -time.Second || diff > time.Second {
+			t.Errorf("Expected earliest date %v (from req2 additional_metadata.date), got %v", expectedDate, earliestDate)
+		}
+	})
+}
