@@ -83,6 +83,7 @@ type ImageInfo struct {
 	Summary           string     `json:"summary"`
 	Tags              []string   `json:"tags"`
 	Base64Data        string     `json:"base64_data,omitempty"`
+	ScraperUUID       string     `json:"scraper_uuid,omitempty"`
 	TombstoneDatetime *time.Time `json:"tombstone_datetime,omitempty"`
 }
 

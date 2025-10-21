@@ -10,6 +10,7 @@ import (
 type Config struct {
 	ScraperBaseURL      string
 	TextAnalyzerBaseURL string
+	SchedulerBaseURL    string
 	Port                int
 	DatabasePath        string
 	LinkScoreThreshold  float64 // Minimum score for link recommendation (0.0-1.0)
@@ -21,6 +22,7 @@ func Load() (*Config, error) {
 	config := &Config{
 		ScraperBaseURL:      getEnv("SCRAPER_BASE_URL", "http://localhost:8081"),
 		TextAnalyzerBaseURL: getEnv("TEXTANALYZER_BASE_URL", "http://localhost:8082"),
+		SchedulerBaseURL:    getEnv("SCHEDULER_BASE_URL", "http://localhost:8083"),
 		Port:                getEnvAsInt("CONTROLLER_PORT", 8080),
 		DatabasePath:        getEnv("DATABASE_PATH", "./controller.db"),
 		LinkScoreThreshold:  getEnvAsFloat("LINK_SCORE_THRESHOLD", 0.5),
@@ -41,6 +43,9 @@ func (c *Config) Validate() error {
 	}
 	if c.TextAnalyzerBaseURL == "" {
 		return fmt.Errorf("TEXTANALYZER_BASE_URL is required")
+	}
+	if c.SchedulerBaseURL == "" {
+		return fmt.Errorf("SCHEDULER_BASE_URL is required")
 	}
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("CONTROLLER_PORT must be between 1 and 65535")
