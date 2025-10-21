@@ -22,12 +22,79 @@ type Storage struct {
 type Request struct {
 	ID               string                 `json:"id"`
 	CreatedAt        time.Time              `json:"created_at"`
-	SourceType       string                 `json:"source_type"` // "url" or "text"
+	EffectiveDate    time.Time              `json:"effective_date"` // Normalized date from metadata or created_at
+	SourceType       string                 `json:"source_type"`    // "url" or "text"
 	SourceURL        *string                `json:"source_url,omitempty"`
 	ScraperUUID      *string                `json:"scraper_uuid,omitempty"`
 	TextAnalyzerUUID string                 `json:"textanalyzer_uuid"`
 	Tags             []string               `json:"tags"`
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// extractEffectiveDate extracts the effective date from metadata following a precedence order.
+// This is the single source of truth for date extraction logic (DRY principle).
+// Precedence: scraper_metadata.publish_date -> scraper_metadata.published_date ->
+//            additional_metadata.publish_date -> additional_metadata.published_date ->
+//            additional_metadata.date -> fallback (created_at)
+func extractEffectiveDate(metadata map[string]interface{}, fallback time.Time) time.Time {
+	// Common date formats to try
+	formats := []string{
+		time.RFC3339,
+		time.RFC3339Nano,
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+	}
+
+	// Helper to try parsing a date string with multiple formats
+	tryParseDate := func(dateStr string) (time.Time, bool) {
+		for _, format := range formats {
+			if t, err := time.Parse(format, dateStr); err == nil {
+				return t, true
+			}
+		}
+		return time.Time{}, false
+	}
+
+	// Helper to extract string from nested map path
+	getNestedString := func(path ...string) (string, bool) {
+		current := metadata
+		for i, key := range path {
+			if i == len(path)-1 {
+				// Last key - try to get the string value
+				if val, ok := current[key].(string); ok {
+					return val, true
+				}
+				return "", false
+			}
+			// Intermediate key - navigate deeper
+			if next, ok := current[key].(map[string]interface{}); ok {
+				current = next
+			} else {
+				return "", false
+			}
+		}
+		return "", false
+	}
+
+	// Try each path in precedence order
+	paths := [][]string{
+		{"scraper_metadata", "publish_date"},
+		{"scraper_metadata", "published_date"},
+		{"additional_metadata", "publish_date"},
+		{"additional_metadata", "published_date"},
+		{"additional_metadata", "date"},
+	}
+
+	for _, path := range paths {
+		if dateStr, ok := getNestedString(path...); ok && dateStr != "" {
+			if t, ok := tryParseDate(dateStr); ok {
+				return t
+			}
+		}
+	}
+
+	// No valid date found in metadata, use fallback
+	return fallback
 }
 
 // New creates a new Storage instance and runs migrations
@@ -82,17 +149,24 @@ func (s *Storage) SaveRequest(req *Request) error {
 		}
 	}
 
+	// Extract effective date from metadata (DRY: single source of truth)
+	// If not already set, extract from metadata with created_at as fallback
+	if req.EffectiveDate.IsZero() {
+		req.EffectiveDate = extractEffectiveDate(req.Metadata, req.CreatedAt)
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	// Insert request record
+	// Insert request record with effective_date
+	// Format effective_date as RFC3339 string for consistent SQLite storage
 	_, err = tx.Exec(`
-		INSERT INTO requests (id, created_at, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, req.ID, req.CreatedAt, req.SourceType, req.SourceURL, req.ScraperUUID, req.TextAnalyzerUUID, string(tagsJSON), string(metadataJSON))
+		INSERT INTO requests (id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, req.ID, req.CreatedAt, req.EffectiveDate.Format(time.RFC3339), req.SourceType, req.SourceURL, req.ScraperUUID, req.TextAnalyzerUUID, string(tagsJSON), string(metadataJSON))
 	if err != nil {
 		return fmt.Errorf("failed to insert request: %w", err)
 	}
@@ -122,13 +196,20 @@ func (s *Storage) SaveRequest(req *Request) error {
 // GetRequest retrieves a request by ID
 func (s *Storage) GetRequest(id string) (*Request, error) {
 	var req Request
-	var tagsJSON, metadataJSON sql.NullString
+	var tagsJSON, metadataJSON, effectiveDateStr sql.NullString
 
 	err := s.db.QueryRow(`
-		SELECT id, created_at, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json
+		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json
 		FROM requests
 		WHERE id = ?
-	`, id).Scan(&req.ID, &req.CreatedAt, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON)
+	`, id).Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON)
+
+	// Parse effective_date from string
+	if effectiveDateStr.Valid && effectiveDateStr.String != "" {
+		if parsedDate, err := time.Parse(time.RFC3339, effectiveDateStr.String); err == nil {
+			req.EffectiveDate = parsedDate
+		}
+	}
 
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("request not found")
@@ -283,14 +364,15 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 	var whereClauses []string
 	var args []interface{}
 
-	// Date range filter
+	// Date range filter - use effective_date column (normalized at ingestion time)
+	// effective_date is stored as RFC3339 string, so we need to format the time.Time values
 	if opts.DateStart != nil {
-		whereClauses = append(whereClauses, "r.created_at >= ?")
-		args = append(args, *opts.DateStart)
+		whereClauses = append(whereClauses, "r.effective_date >= ?")
+		args = append(args, opts.DateStart.Format(time.RFC3339))
 	}
 	if opts.DateEnd != nil {
-		whereClauses = append(whereClauses, "r.created_at <= ?")
-		args = append(args, *opts.DateEnd)
+		whereClauses = append(whereClauses, "r.effective_date <= ?")
+		args = append(args, opts.DateEnd.Format(time.RFC3339))
 	}
 
 	// Source type filter
@@ -316,7 +398,7 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 
 		// Use INNER JOIN to filter by tags
 		query = `
-			SELECT DISTINCT r.id, r.created_at, r.source_type, r.source_url, r.scraper_uuid, r.textanalyzer_uuid, r.tags_json, r.metadata_json
+			SELECT DISTINCT r.id, r.created_at, r.effective_date, r.source_type, r.source_url, r.scraper_uuid, r.textanalyzer_uuid, r.tags_json, r.metadata_json
 			FROM requests r
 			INNER JOIN tags t ON r.id = t.request_id
 			WHERE (` + strings.Join(tagConditions, " OR ") + `)`
@@ -328,7 +410,7 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 	} else {
 		// No tags specified, query requests table directly
 		query = `
-			SELECT id, created_at, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json
+			SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json
 			FROM requests r`
 
 		if len(whereClauses) > 0 {
@@ -336,8 +418,8 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 		}
 	}
 
-	// Add ORDER BY and pagination
-	query += " ORDER BY r.created_at DESC"
+	// Add ORDER BY and pagination - order by effective date
+	query += " ORDER BY r.effective_date DESC"
 	if opts.Limit > 0 {
 		query += " LIMIT ?"
 		args = append(args, opts.Limit)
@@ -356,11 +438,27 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 	var requests []*Request
 	for rows.Next() {
 		var req Request
-		var tagsJSON, metadataJSON sql.NullString
+		var tagsJSON, metadataJSON, effectiveDateStr sql.NullString
 
-		err := rows.Scan(&req.ID, &req.CreatedAt, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON)
+		err := rows.Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan request: %w", err)
+		}
+
+		// Parse effective_date from string
+		if effectiveDateStr.Valid && effectiveDateStr.String != "" {
+			if parsedDate, err := time.Parse(time.RFC3339, effectiveDateStr.String); err == nil {
+				req.EffectiveDate = parsedDate
+			} else {
+				// If RFC3339 fails, try other formats
+				formats := []string{time.RFC3339Nano, "2006-01-02 15:04:05"}
+				for _, format := range formats {
+					if parsedDate, err := time.Parse(format, effectiveDateStr.String); err == nil {
+						req.EffectiveDate = parsedDate
+						break
+					}
+				}
+			}
 		}
 
 		if tagsJSON.Valid {
@@ -388,9 +486,9 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 // ListRequests returns all requests ordered by creation time
 func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 	query := `
-		SELECT id, created_at, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json
+		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json
 		FROM requests
-		ORDER BY created_at DESC
+		ORDER BY effective_date DESC
 		LIMIT ? OFFSET ?
 	`
 
@@ -403,11 +501,18 @@ func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 	var requests []*Request
 	for rows.Next() {
 		var req Request
-		var tagsJSON, metadataJSON sql.NullString
+		var tagsJSON, metadataJSON, effectiveDateStr sql.NullString
 
-		err := rows.Scan(&req.ID, &req.CreatedAt, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON)
+		err := rows.Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan request: %w", err)
+		}
+
+		// Parse effective_date from string
+		if effectiveDateStr.Valid && effectiveDateStr.String != "" {
+			if parsedDate, err := time.Parse(time.RFC3339, effectiveDateStr.String); err == nil {
+				req.EffectiveDate = parsedDate
+			}
 		}
 
 		if tagsJSON.Valid {
@@ -430,6 +535,37 @@ func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 	}
 
 	return requests, nil
+}
+
+// GetTimelineExtents returns the earliest effective_date from all documents
+// to determine the min date for timeline visualization.
+//
+// effective_date is normalized at ingestion time using extractEffectiveDate(),
+// which follows the precedence: publish_date -> published_date -> additional_metadata.date -> created_at
+//
+// Returns nil if no requests exist in the database.
+func (s *Storage) GetTimelineExtents() (*time.Time, error) {
+	// Simple query using the pre-normalized effective_date column
+	query := `SELECT MIN(effective_date) FROM requests`
+
+	var earliestDateStr sql.NullString
+	err := s.db.QueryRow(query).Scan(&earliestDateStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get timeline extents: %w", err)
+	}
+
+	// No documents in database
+	if !earliestDateStr.Valid || earliestDateStr.String == "" {
+		return nil, nil
+	}
+
+	// Parse the date string
+	parsedDate, err := time.Parse(time.RFC3339, earliestDateStr.String)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse earliest date: %w", err)
+	}
+
+	return &parsedDate, nil
 }
 
 // GenerateMockData generates 6 months of realistic historical data for testing

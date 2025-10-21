@@ -1465,3 +1465,183 @@ func TestDeleteRequestNotFound(t *testing.T) {
 		t.Errorf("Expected status 404, got %d. Body: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestGetTimelineExtents(t *testing.T) {
+	t.Run("empty database returns default date", func(t *testing.T) {
+		handler, _, _, cleanup := setupTestHandler(t)
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/api/requests/timeline-extents", nil)
+		w := httptest.NewRecorder()
+
+		handler.GetTimelineExtents(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var response map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+
+		earliestDateStr, ok := response["earliest_date"].(string)
+		if !ok {
+			t.Fatal("Expected earliest_date in response")
+		}
+
+		earliestDate, err := time.Parse(time.RFC3339, earliestDateStr)
+		if err != nil {
+			t.Fatalf("Failed to parse earliest_date: %v", err)
+		}
+
+		// For empty database, should return 30 days ago (approximately)
+		now := time.Now()
+		expectedDate := now.AddDate(0, 0, -30)
+		diff := earliestDate.Sub(expectedDate)
+		// Allow 1 minute tolerance for test execution time
+		if diff < -time.Minute || diff > time.Minute {
+			t.Errorf("Expected earliest_date around %v (30 days ago), got %v (diff: %v)", expectedDate, earliestDate, diff)
+		}
+	})
+
+	t.Run("returns earliest effective date from documents", func(t *testing.T) {
+		// Create custom storage for this test
+		dbPath := "test_timeline_extents_handler.db"
+		defer os.Remove(dbPath)
+
+		store, err := storage.New(dbPath)
+		if err != nil {
+			t.Fatalf("Failed to create storage: %v", err)
+		}
+		defer store.Close()
+
+		scraperServer := mockScraperServer()
+		defer scraperServer.Close()
+		textanalyzerServer := mockTextAnalyzerServer()
+		defer textanalyzerServer.Close()
+
+		scraper := clients.NewScraperClient(scraperServer.URL)
+		textAnalyzer := clients.NewTextAnalyzerClient(textanalyzerServer.URL)
+
+		handler := &Handler{
+			storage:            store,
+			scraper:            scraper,
+			textAnalyzer:       textAnalyzer,
+			linkScoreThreshold: 0.5,
+		}
+
+		// Create documents with different dates
+		// Document 1: March 2024
+		sourceURL1 := "https://example.com/article-1"
+		scraperUUID1 := "scraper-1"
+		req1 := &storage.Request{
+			ID:               "test-1",
+			CreatedAt:        time.Now().UTC(),
+			SourceType:       "url",
+			SourceURL:        &sourceURL1,
+			ScraperUUID:      &scraperUUID1,
+			TextAnalyzerUUID: "analyzer-1",
+			Tags:             []string{"test"},
+			Metadata: map[string]interface{}{
+				"scraper_metadata": map[string]interface{}{
+					"publish_date": time.Date(2024, 3, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+				},
+			},
+		}
+		if err := store.SaveRequest(req1); err != nil {
+			t.Fatalf("Failed to save request 1: %v", err)
+		}
+
+		// Document 2: January 2024 (earliest)
+		sourceURL2 := "https://example.com/article-2"
+		scraperUUID2 := "scraper-2"
+		req2 := &storage.Request{
+			ID:               "test-2",
+			CreatedAt:        time.Now().UTC(),
+			SourceType:       "url",
+			SourceURL:        &sourceURL2,
+			ScraperUUID:      &scraperUUID2,
+			TextAnalyzerUUID: "analyzer-2",
+			Tags:             []string{"test"},
+			Metadata: map[string]interface{}{
+				"scraper_metadata": map[string]interface{}{
+					"publish_date": time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+				},
+			},
+		}
+		if err := store.SaveRequest(req2); err != nil {
+			t.Fatalf("Failed to save request 2: %v", err)
+		}
+
+		// Document 3: May 2024
+		sourceURL3 := "https://example.com/article-3"
+		scraperUUID3 := "scraper-3"
+		req3 := &storage.Request{
+			ID:               "test-3",
+			CreatedAt:        time.Now().UTC(),
+			SourceType:       "url",
+			SourceURL:        &sourceURL3,
+			ScraperUUID:      &scraperUUID3,
+			TextAnalyzerUUID: "analyzer-3",
+			Tags:             []string{"test"},
+			Metadata: map[string]interface{}{
+				"scraper_metadata": map[string]interface{}{
+					"publish_date": time.Date(2024, 5, 1, 0, 0, 0, 0, time.UTC).Format(time.RFC3339),
+				},
+			},
+		}
+		if err := store.SaveRequest(req3); err != nil {
+			t.Fatalf("Failed to save request 3: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/api/requests/timeline-extents", nil)
+		w := httptest.NewRecorder()
+
+		handler.GetTimelineExtents(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var response map[string]interface{}
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatalf("Failed to decode response: %v", err)
+		}
+
+		earliestDateStr, ok := response["earliest_date"].(string)
+		if !ok {
+			t.Fatal("Expected earliest_date in response")
+		}
+
+		earliestDate, err := time.Parse(time.RFC3339, earliestDateStr)
+		if err != nil {
+			t.Fatalf("Failed to parse earliest_date: %v", err)
+		}
+
+		// Should return January 15, 2024 from req2
+		expectedDate := time.Date(2024, 1, 15, 0, 0, 0, 0, time.UTC)
+		diff := earliestDate.Sub(expectedDate)
+		if diff < -time.Second || diff > time.Second {
+			t.Errorf("Expected earliest_date %v, got %v (diff: %v)", expectedDate, earliestDate, diff)
+		}
+	})
+
+	t.Run("method not allowed for non-GET requests", func(t *testing.T) {
+		handler, _, _, cleanup := setupTestHandler(t)
+		defer cleanup()
+
+		methods := []string{http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch}
+
+		for _, method := range methods {
+			req := httptest.NewRequest(method, "/api/requests/timeline-extents", nil)
+			w := httptest.NewRecorder()
+
+			handler.GetTimelineExtents(w, req)
+
+			if w.Code != http.StatusMethodNotAllowed {
+				t.Errorf("Expected status 405 for %s method, got %d", method, w.Code)
+			}
+		}
+	})
+}

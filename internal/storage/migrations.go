@@ -55,6 +55,29 @@ var migrations = []Migration{
 			CREATE INDEX IF NOT EXISTS idx_tags_request_id ON tags(request_id);
 		`,
 	},
+	{
+		Version: 3,
+		Name:    "add_effective_date",
+		SQL: `
+			-- Add effective_date column to requests table
+			ALTER TABLE requests ADD COLUMN effective_date TIMESTAMP;
+
+			-- Create index on effective_date for efficient timeline queries
+			CREATE INDEX IF NOT EXISTS idx_requests_effective_date ON requests(effective_date DESC);
+
+			-- Populate effective_date for existing records using the same logic as timeline
+			-- This uses the date precedence: publish_date -> published_date -> additional_metadata.date -> created_at
+			UPDATE requests
+			SET effective_date = COALESCE(
+				json_extract(metadata_json, '$.scraper_metadata.publish_date'),
+				json_extract(metadata_json, '$.scraper_metadata.published_date'),
+				json_extract(metadata_json, '$.additional_metadata.publish_date'),
+				json_extract(metadata_json, '$.additional_metadata.published_date'),
+				json_extract(metadata_json, '$.additional_metadata.date'),
+				created_at
+			);
+		`,
+	},
 }
 
 // RunMigrations executes all pending migrations
