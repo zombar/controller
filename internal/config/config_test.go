@@ -74,6 +74,7 @@ func TestValidate(t *testing.T) {
 			config: &Config{
 				ScraperBaseURL:      "http://localhost:8081",
 				TextAnalyzerBaseURL: "http://localhost:8082",
+				SchedulerBaseURL:    "http://localhost:8083",
 				Port:                8080,
 				DatabasePath:        "./test.db",
 			},
