@@ -22,7 +22,7 @@ func TestCreate(t *testing.T) {
 	manager := NewManager()
 	url := "https://example.com"
 
-	req, isNew := manager.Create(url)
+	req, isNew := manager.Create(url, false)
 
 	if !isNew {
 		t.Error("Expected isNew to be true for first request")
@@ -59,12 +59,12 @@ func TestCreateDuplicate(t *testing.T) {
 	manager := NewManager()
 	url := "https://example.com"
 
-	req1, isNew1 := manager.Create(url)
+	req1, isNew1 := manager.Create(url, false)
 	if !isNew1 {
 		t.Error("Expected first request to be new")
 	}
 
-	req2, isNew2 := manager.Create(url)
+	req2, isNew2 := manager.Create(url, false)
 	if isNew2 {
 		t.Error("Expected duplicate request to not be new")
 	}
@@ -78,7 +78,7 @@ func TestGet(t *testing.T) {
 	manager := NewManager()
 	url := "https://example.com"
 
-	created, _ := manager.Create(url)
+	created, _ := manager.Create(url, false)
 
 	retrieved, exists := manager.Get(created.ID)
 	if !exists {
@@ -107,7 +107,7 @@ func TestUpdateStatus(t *testing.T) {
 	manager := NewManager()
 	url := "https://example.com"
 
-	req, _ := manager.Create(url)
+	req, _ := manager.Create(url, false)
 	originalUpdatedAt := req.UpdatedAt
 	time.Sleep(10 * time.Millisecond) // Small delay to ensure time difference
 
@@ -135,7 +135,7 @@ func TestSetCompleted(t *testing.T) {
 	manager := NewManager()
 	url := "https://example.com"
 
-	req, _ := manager.Create(url)
+	req, _ := manager.Create(url, false)
 	resultID := "result-test-uuid"
 
 	manager.SetCompleted(req.ID, resultID)
@@ -162,7 +162,7 @@ func TestSetFailed(t *testing.T) {
 	manager := NewManager()
 	url := "https://example.com"
 
-	req, _ := manager.Create(url)
+	req, _ := manager.Create(url, false)
 	errorMsg := "Test error message"
 
 	manager.SetFailed(req.ID, errorMsg)
@@ -185,7 +185,7 @@ func TestRetry(t *testing.T) {
 	manager := NewManager()
 	url := "https://example.com"
 
-	req, _ := manager.Create(url)
+	req, _ := manager.Create(url, false)
 	manager.SetFailed(req.ID, "Original error")
 
 	success := manager.Retry(req.ID)
@@ -224,7 +224,7 @@ func TestDelete(t *testing.T) {
 	manager := NewManager()
 	url := "https://example.com"
 
-	req, _ := manager.Create(url)
+	req, _ := manager.Create(url, false)
 
 	manager.Delete(req.ID)
 
@@ -234,7 +234,7 @@ func TestDelete(t *testing.T) {
 	}
 
 	// Verify URL mapping is also removed
-	duplicate, isNew := manager.Create(url)
+	duplicate, isNew := manager.Create(url, false)
 	if !isNew {
 		t.Error("Expected to create new request after deletion")
 	}
@@ -255,7 +255,7 @@ func TestList(t *testing.T) {
 	}
 
 	for _, url := range urls {
-		manager.Create(url)
+		manager.Create(url, false)
 	}
 
 	requests := manager.List()
@@ -281,7 +281,7 @@ func TestConcurrentAccess(t *testing.T) {
 	url := "https://example.com"
 
 	// Create initial request
-	req, _ := manager.Create(url)
+	req, _ := manager.Create(url, false)
 
 	// Simulate concurrent updates
 	done := make(chan bool)
@@ -313,7 +313,7 @@ func TestExpirationTime(t *testing.T) {
 	url := "https://example.com"
 
 	before := time.Now().Add(15 * time.Minute)
-	req, _ := manager.Create(url)
+	req, _ := manager.Create(url, false)
 	after := time.Now().Add(15 * time.Minute)
 
 	if req.ExpiresAt.Before(before.Add(-1*time.Second)) {
@@ -328,8 +328,8 @@ func TestExpirationTime(t *testing.T) {
 func TestDeletePreservesOtherRequests(t *testing.T) {
 	manager := NewManager()
 
-	req1, _ := manager.Create("https://example1.com")
-	req2, _ := manager.Create("https://example2.com")
+	req1, _ := manager.Create("https://example1.com", false)
+	req2, _ := manager.Create("https://example2.com", false)
 
 	manager.Delete(req1.ID)
 
@@ -441,7 +441,7 @@ func TestDeleteTextRequest(t *testing.T) {
 func TestMixedURLAndTextRequests(t *testing.T) {
 	manager := NewManager()
 
-	urlReq, _ := manager.Create("https://example.com")
+	urlReq, _ := manager.Create("https://example.com", false)
 	textReq, _ := manager.CreateText("Some text")
 
 	requests := manager.List()
