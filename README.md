@@ -1,5 +1,8 @@
 # Controller Service
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/zombar/purpletab)](https://goreportcard.com/report/github.com/zombar/purpletab)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/zombar/purpletab)](go.mod)
+
 A central orchestration service that coordinates the scraper and textanalyzer microservices, providing a unified API for URL scraping, text analysis, and content search.
 
 ## Features
