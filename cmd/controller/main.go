@@ -59,9 +59,10 @@ func main() {
 	// Initialize clients
 	scraperClient := clients.NewScraperClient(cfg.ScraperBaseURL)
 	textAnalyzerClient := clients.NewTextAnalyzerClient(cfg.TextAnalyzerBaseURL)
+	schedulerClient := clients.NewSchedulerClient(cfg.SchedulerBaseURL)
 
 	// Initialize handlers
-	handler := handlers.New(store, scraperClient, textAnalyzerClient, cfg.LinkScoreThreshold)
+	handler := handlers.New(store, scraperClient, textAnalyzerClient, schedulerClient, cfg.LinkScoreThreshold)
 
 	// Setup routes
 	mux := http.NewServeMux()
@@ -162,6 +163,28 @@ func main() {
 		}
 	})
 
+	// Scheduler routes
+	mux.HandleFunc("/api/scheduler/tasks", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handler.ListSchedulerTasks(w, r)
+		} else if r.Method == http.MethodPost {
+			handler.CreateSchedulerTask(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/api/scheduler/tasks/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handler.GetSchedulerTask(w, r)
+		} else if r.Method == http.MethodPut {
+			handler.UpdateSchedulerTask(w, r)
+		} else if r.Method == http.MethodDelete {
+			handler.DeleteSchedulerTask(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
 	// Setup server with CORS middleware
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	server := &http.Server{
@@ -178,6 +201,7 @@ func main() {
 		log.Printf("Controller service starting on port %d", cfg.Port)
 		log.Printf("Scraper URL: %s", cfg.ScraperBaseURL)
 		log.Printf("TextAnalyzer URL: %s", cfg.TextAnalyzerBaseURL)
+		log.Printf("Scheduler URL: %s", cfg.SchedulerBaseURL)
 		log.Printf("Database: %s", cfg.DatabasePath)
 		log.Printf("Link Score Threshold: %.2f", cfg.LinkScoreThreshold)
 

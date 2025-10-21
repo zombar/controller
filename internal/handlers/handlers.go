@@ -19,16 +19,18 @@ type Handler struct {
 	storage            *storage.Storage
 	scraper            *clients.ScraperClient
 	textAnalyzer       *clients.TextAnalyzerClient
+	scheduler          *clients.SchedulerClient
 	linkScoreThreshold float64
 	scrapeRequests     *scraper_requests.Manager
 }
 
 // New creates a new Handler
-func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, linkScoreThreshold float64) *Handler {
+func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, linkScoreThreshold float64) *Handler {
 	return &Handler{
 		storage:            store,
 		scraper:            scraper,
 		textAnalyzer:       textAnalyzer,
+		scheduler:          scheduler,
 		linkScoreThreshold: linkScoreThreshold,
 		scrapeRequests:     scraper_requests.NewManager(),
 	}
@@ -36,7 +38,8 @@ func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *c
 
 // ScrapeURLRequest represents a request to scrape a URL
 type ScrapeURLRequest struct {
-	URL string `json:"url"`
+	URL          string `json:"url"`
+	ExtractLinks bool   `json:"extract_links,omitempty"`
 }
 
 // AnalyzeTextRequest represents a request to analyze text directly
@@ -950,11 +953,11 @@ func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create or get existing scrape request
-	scrapeReq, isNew := h.scrapeRequests.Create(req.URL)
+	scrapeReq, isNew := h.scrapeRequests.Create(req.URL, req.ExtractLinks)
 
 	// If new, start background scraping
 	if isNew {
-		go h.processScrapeRequest(scrapeReq.ID, req.URL)
+		go h.processScrapeRequest(scrapeReq.ID, req.URL, req.ExtractLinks)
 	}
 
 	respondJSON(w, scrapeReq, http.StatusOK)
@@ -1056,7 +1059,7 @@ func (h *Handler) RetryScrapeRequest(w http.ResponseWriter, r *http.Request) {
 	req.ErrorMessage = ""
 
 	// Start background scraping
-	go h.processScrapeRequest(id, req.URL)
+	go h.processScrapeRequest(id, req.URL, req.ExtractLinks)
 
 	// Get updated request
 	updatedReq, _ := h.scrapeRequests.Get(id)
@@ -1085,7 +1088,7 @@ func (h *Handler) DeleteScrapeRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 // processScrapeRequest processes a scrape request in the background
-func (h *Handler) processScrapeRequest(id, url string) {
+func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
 	// Update status to processing
 	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 10)
 
@@ -1209,6 +1212,42 @@ func (h *Handler) processScrapeRequest(id, url string) {
 	// Mark as completed
 	h.scrapeRequests.SetCompleted(id, requestID)
 	log.Printf("Scrape request %s completed successfully, result saved as %s", id, requestID)
+
+	// Extract links if requested (skip for image URLs)
+	if extractLinks && !isImageURL {
+		log.Printf("Extracting links from %s", url)
+		extractResp, err := h.scraper.ExtractLinks(url)
+		if err != nil {
+			log.Printf("Failed to extract links from %s: %v", url, err)
+			return
+		}
+
+		// Create scrape requests for extracted links (limit to top 10 by length)
+		links := extractResp.Links
+		if len(links) > 10 {
+			// Sort by length descending and take top 10
+			sortedLinks := make([]string, len(links))
+			copy(sortedLinks, links)
+			// Simple bubble sort for top 10 longest
+			for i := 0; i < len(sortedLinks); i++ {
+				for j := i + 1; j < len(sortedLinks); j++ {
+					if len(sortedLinks[j]) > len(sortedLinks[i]) {
+						sortedLinks[i], sortedLinks[j] = sortedLinks[j], sortedLinks[i]
+					}
+				}
+			}
+			links = sortedLinks[:10]
+		}
+
+		log.Printf("Creating scrape requests for %d extracted links", len(links))
+		for _, link := range links {
+			// Create scrape request for each link (without extract_links to avoid infinite recursion)
+			scrapeReq, isNew := h.scrapeRequests.Create(link, false)
+			if isNew {
+				go h.processScrapeRequest(scrapeReq.ID, link, false)
+			}
+		}
+	}
 }
 
 // processTextAnalysisRequest processes a text analysis request in the background
@@ -1248,6 +1287,121 @@ func (h *Handler) processTextAnalysisRequest(id, text string) {
 	// Mark as completed
 	h.scrapeRequests.SetCompleted(id, requestID)
 	log.Printf("Text analysis request %s completed successfully, result saved as %s", id, requestID)
+}
+
+// ListSchedulerTasks proxies the scheduler's list tasks endpoint
+func (h *Handler) ListSchedulerTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	tasks, err := h.scheduler.ListTasks()
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to list tasks: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, tasks, http.StatusOK)
+}
+
+// GetSchedulerTask proxies the scheduler's get task endpoint
+func (h *Handler) GetSchedulerTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract task ID from path
+	idStr := r.URL.Path[len("/api/scheduler/tasks/"):]
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		respondError(w, "Invalid task ID", http.StatusBadRequest)
+		return
+	}
+
+	task, err := h.scheduler.GetTask(id)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to get task: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, task, http.StatusOK)
+}
+
+// CreateSchedulerTask proxies the scheduler's create task endpoint
+func (h *Handler) CreateSchedulerTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var task clients.Task
+	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	createdTask, err := h.scheduler.CreateTask(&task)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to create task: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, createdTask, http.StatusCreated)
+}
+
+// UpdateSchedulerTask proxies the scheduler's update task endpoint
+func (h *Handler) UpdateSchedulerTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract task ID from path
+	idStr := r.URL.Path[len("/api/scheduler/tasks/"):]
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		respondError(w, "Invalid task ID", http.StatusBadRequest)
+		return
+	}
+
+	var task clients.Task
+	if err := json.NewDecoder(r.Body).Decode(&task); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	updatedTask, err := h.scheduler.UpdateTask(id, &task)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to update task: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, updatedTask, http.StatusOK)
+}
+
+// DeleteSchedulerTask proxies the scheduler's delete task endpoint
+func (h *Handler) DeleteSchedulerTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract task ID from path
+	idStr := r.URL.Path[len("/api/scheduler/tasks/"):]
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		respondError(w, "Invalid task ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.scheduler.DeleteTask(id); err != nil {
+		respondError(w, fmt.Sprintf("Failed to delete task: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Health check endpoint

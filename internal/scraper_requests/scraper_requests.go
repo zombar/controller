@@ -23,6 +23,7 @@ type ScrapeRequest struct {
 	SourceType       string              `json:"source_type"`         // "url" or "text"
 	URL              string              `json:"url,omitempty"`       // For URL requests
 	Text             string              `json:"text,omitempty"`      // For text requests
+	ExtractLinks     bool                `json:"extract_links"`       // Whether to extract links after scraping
 	Status           ScrapeRequestStatus `json:"status"`
 	Progress         int                 `json:"progress"` // 0-100
 	CreatedAt        time.Time           `json:"created_at"`
@@ -53,7 +54,7 @@ func NewManager() *Manager {
 }
 
 // Create creates a new scrape request or returns existing one for the same URL
-func (m *Manager) Create(url string) (*ScrapeRequest, bool) {
+func (m *Manager) Create(url string, extractLinks bool) (*ScrapeRequest, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -70,14 +71,15 @@ func (m *Manager) Create(url string) (*ScrapeRequest, bool) {
 	// Create new request
 	now := time.Now()
 	req := &ScrapeRequest{
-		ID:         uuid.New().String(),
-		SourceType: "url",
-		URL:        url,
-		Status:     StatusPending,
-		Progress:   0,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		ExpiresAt:  now.Add(15 * time.Minute),
+		ID:           uuid.New().String(),
+		SourceType:   "url",
+		URL:          url,
+		ExtractLinks: extractLinks,
+		Status:       StatusPending,
+		Progress:     0,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+		ExpiresAt:    now.Add(15 * time.Minute),
 	}
 
 	m.requests[req.ID] = req
