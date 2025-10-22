@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,10 +23,11 @@ type Handler struct {
 	scheduler          *clients.SchedulerClient
 	linkScoreThreshold float64
 	scrapeRequests     *scraper_requests.Manager
+	webInterfaceURL    string
 }
 
 // New creates a new Handler
-func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, linkScoreThreshold float64) *Handler {
+func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, linkScoreThreshold float64, webInterfaceURL string) *Handler {
 	return &Handler{
 		storage:            store,
 		scraper:            scraper,
@@ -33,6 +35,7 @@ func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *c
 		scheduler:          scheduler,
 		linkScoreThreshold: linkScoreThreshold,
 		scrapeRequests:     scraper_requests.NewManager(),
+		webInterfaceURL:    webInterfaceURL,
 	}
 }
 
@@ -75,6 +78,7 @@ type ControllerResponse struct {
 	TextAnalyzerUUID string                 `json:"textanalyzer_uuid"`
 	Tags             []string               `json:"tags"`
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
+	Slug             *string                `json:"slug,omitempty"`
 }
 
 // ErrorResponse represents an error response
@@ -154,6 +158,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 			SourceURL:     record.SourceURL,
 			Tags:          record.Tags,
 			Metadata:      record.Metadata,
+			Slug:          record.Slug,
 		}
 
 		respondJSON(w, response, http.StatusCreated)
@@ -230,6 +235,12 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Extract slug from scraper response if available
+	var slug *string
+	if scraperResp.Slug != "" {
+		slug = &scraperResp.Slug
+	}
+
 	record := &storage.Request{
 		ID:               controllerID,
 		CreatedAt:        time.Now().UTC(),
@@ -239,6 +250,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		TextAnalyzerUUID: analyzerUUID,
 		Tags:             tags,
 		Metadata:         combinedMetadata,
+		Slug:             slug,
 	}
 
 	if err := h.storage.SaveRequest(record); err != nil {
@@ -257,6 +269,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		TextAnalyzerUUID: record.TextAnalyzerUUID,
 		Tags:             record.Tags,
 		Metadata:         record.Metadata,
+		Slug:             record.Slug,
 	}
 
 	respondJSON(w, response, http.StatusCreated)
@@ -315,6 +328,7 @@ func (h *Handler) AnalyzeText(w http.ResponseWriter, r *http.Request) {
 		TextAnalyzerUUID: record.TextAnalyzerUUID,
 		Tags:             record.Tags,
 		Metadata:         record.Metadata,
+		Slug:             record.Slug,
 	}
 
 	respondJSON(w, response, http.StatusCreated)
@@ -421,6 +435,7 @@ func (h *Handler) FilterRequests(w http.ResponseWriter, r *http.Request) {
 			TextAnalyzerUUID: record.TextAnalyzerUUID,
 			Tags:             record.Tags,
 			Metadata:         record.Metadata,
+			Slug:             record.Slug,
 		})
 	}
 
@@ -496,6 +511,7 @@ func (h *Handler) GetRequest(w http.ResponseWriter, r *http.Request) {
 		TextAnalyzerUUID: record.TextAnalyzerUUID,
 		Tags:             record.Tags,
 		Metadata:         record.Metadata,
+		Slug:             record.Slug,
 	}
 
 	respondJSON(w, response, http.StatusOK)
@@ -745,6 +761,7 @@ func (h *Handler) ListRequests(w http.ResponseWriter, r *http.Request) {
 			TextAnalyzerUUID: record.TextAnalyzerUUID,
 			Tags:             record.Tags,
 			Metadata:         record.Metadata,
+			Slug:             record.Slug,
 		})
 	}
 
@@ -804,8 +821,12 @@ func (h *Handler) GetDocumentImages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract scraper UUID from URL path
-	scrapeID := r.URL.Path[len("/api/documents/"):len(r.URL.Path)-len("/images")]
-	if scrapeID == "" {
+	// Path format: /api/documents/{uuid}/images
+	path := strings.TrimPrefix(r.URL.Path, "/api/documents/")
+	path = strings.TrimSuffix(path, "/images")
+	scrapeID := path
+
+	if scrapeID == "" || strings.Contains(scrapeID, "/") {
 		respondError(w, "Scraper UUID is required", http.StatusBadRequest)
 		return
 	}
@@ -1193,6 +1214,12 @@ func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
 		}
 	}
 
+	// Extract slug from scraper response if available
+	var slug *string
+	if scrapeResp.Slug != "" {
+		slug = &scrapeResp.Slug
+	}
+
 	req := &storage.Request{
 		ID:               requestID,
 		CreatedAt:        time.Now(),
@@ -1202,6 +1229,7 @@ func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
 		TextAnalyzerUUID: analyzerUUID,
 		Tags:             tags,
 		Metadata:         combinedMetadata,
+		Slug:             slug,
 	}
 
 	if err := h.storage.SaveRequest(req); err != nil {

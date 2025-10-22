@@ -62,7 +62,7 @@ func main() {
 	schedulerClient := clients.NewSchedulerClient(cfg.SchedulerBaseURL)
 
 	// Initialize handlers
-	handler := handlers.New(store, scraperClient, textAnalyzerClient, schedulerClient, cfg.LinkScoreThreshold)
+	handler := handlers.New(store, scraperClient, textAnalyzerClient, schedulerClient, cfg.LinkScoreThreshold, cfg.WebInterfaceURL)
 
 	// Setup routes
 	mux := http.NewServeMux()
@@ -184,6 +184,12 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+
+	// SEO routes (public-facing)
+	mux.HandleFunc("/content/", handler.ServeContent)            // Serve SEO-optimized content pages
+	mux.HandleFunc("/sitemap.xml", handler.ServeSitemap)         // XML sitemap for search engines
+	mux.HandleFunc("/images-sitemap.xml", handler.ServeImageSitemap) // XML image sitemap
+	mux.HandleFunc("/robots.txt", handler.ServeRobotsTxt)        // Robots.txt for crawlers
 
 	// Setup server with CORS middleware
 	addr := fmt.Sprintf(":%d", cfg.Port)
