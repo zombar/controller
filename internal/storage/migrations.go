@@ -78,6 +78,17 @@ var migrations = []Migration{
 			);
 		`,
 	},
+	{
+		Version: 4,
+		Name:    "add_slug_for_seo",
+		SQL: `
+			-- Add slug column to requests table for SEO-friendly URLs
+			ALTER TABLE requests ADD COLUMN slug TEXT;
+
+			-- Create unique index on slug for fast lookups
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_requests_slug ON requests(slug) WHERE slug IS NOT NULL;
+		`,
+	},
 }
 
 // RunMigrations executes all pending migrations

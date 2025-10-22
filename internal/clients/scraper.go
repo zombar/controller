@@ -28,6 +28,7 @@ type ScraperResponse struct {
 	Content  string                 `json:"content"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 	Score    *LinkScore             `json:"score,omitempty"` // Quality score for the URL
+	Slug     string                 `json:"slug,omitempty"`  // SEO-friendly URL slug
 }
 
 // NewScraperClient creates a new scraper client
@@ -85,6 +86,8 @@ type ImageInfo struct {
 	Base64Data        string     `json:"base64_data,omitempty"`
 	ScraperUUID       string     `json:"scraper_uuid,omitempty"`
 	TombstoneDatetime *time.Time `json:"tombstone_datetime,omitempty"`
+	FilePath          string     `json:"file_path,omitempty"` // Filesystem path for the image
+	Slug              string     `json:"slug,omitempty"`      // SEO-friendly URL slug
 }
 
 // ImageSearchRequest represents a request to search images by tags
@@ -413,4 +416,5 @@ type ScrapedData struct {
 	Cached         bool         `json:"cached"`
 	Metadata       PageMetadata `json:"metadata"`
 	Score          *LinkScore   `json:"score,omitempty"`
+	Slug           string       `json:"slug,omitempty"` // SEO-friendly URL slug
 }

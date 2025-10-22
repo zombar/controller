@@ -1365,7 +1365,260 @@ curl "http://localhost:8080/requests?limit=10&offset=0"
 curl -X POST http://localhost:8080/api/extract-links \
   -H "Content-Type: application/json" \
   -d '{"url": "https://example.com"}'
+
+# Get SEO-optimized content page
+curl http://localhost:8080/content/example-article-slug
+
+# Get XML sitemap
+curl http://localhost:8080/sitemap.xml
+
+# Get robots.txt
+curl http://localhost:8080/robots.txt
 ```
+
+---
+
+## Architecture: Two Audiences
+
+The Controller serves **two distinct audiences** with different endpoints:
+
+### 1. Internal API Endpoints (`/api/*`)
+- For the Web App (admin interface) and programmatic access
+- JSON responses
+- Authentication recommended for production
+- Examples: `/api/scrape`, `/api/requests`, `/api/search`
+
+### 2. Public SEO Endpoints (`/content/*`, `/sitemap.xml`)
+- For search engines and public content discovery
+- HTML/XML responses
+- No authentication required
+- Examples: `/content/{slug}`, `/sitemap.xml`, `/robots.txt`
+
+### Getting Public URLs for Content
+
+When you scrape or analyze content via the API, the response includes a `slug` field that can be used to construct public URLs:
+
+```json
+{
+  "id": "req-123",
+  "slug": "example-article",
+  "source_url": "https://example.com/article",
+  ...
+}
+```
+
+**To get the public SEO page:**
+```
+http://your-controller-domain/content/example-article
+```
+
+**Example integration in Web App:**
+```javascript
+// After scraping
+const response = await fetch('/api/scrape', {
+  method: 'POST',
+  body: JSON.stringify({ url: 'https://example.com' })
+});
+const data = await response.json();
+
+// Construct public URL
+if (data.slug) {
+  const publicUrl = `${window.location.origin}/content/${data.slug}`;
+  console.log('Public page:', publicUrl);
+
+  // Show "View Public Page" button
+  // <a href={publicUrl} target="_blank">View Public Page</a>
+}
+```
+
+---
+
+## SEO and Public Endpoints
+
+The controller provides SEO-friendly public endpoints for serving scraped content to search engines and public users.
+
+### Get SEO Content Page
+
+Serves an SEO-optimized HTML page for scraped content by slug.
+
+**Request:**
+```http
+GET /content/{slug}
+```
+
+**Parameters:**
+- `slug` (string, path parameter) - SEO-friendly URL slug generated from the content title
+
+**Response:**
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Example Article</title>
+
+    <!-- Meta Tags -->
+    <meta name="description" content="Article description...">
+    <meta name="keywords" content="technology, programming, web">
+    <meta name="author" content="Article Author">
+    <link rel="canonical" href="http://localhost:8080/content/example-article-slug">
+
+    <!-- Open Graph Tags -->
+    <meta property="og:type" content="article">
+    <meta property="og:title" content="Example Article">
+    <meta property="og:description" content="Article description...">
+    <meta property="og:url" content="http://localhost:8080/content/example-article-slug">
+    <meta property="og:image" content="http://localhost:8081/api/images/image-slug">
+
+    <!-- Twitter Card Tags -->
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Example Article">
+    <meta name="twitter:description" content="Article description...">
+    <meta name="twitter:image" content="http://localhost:8081/api/images/image-slug">
+
+    <!-- JSON-LD Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "Article",
+      "headline": "Example Article",
+      "description": "Article description...",
+      "author": {
+        "@type": "Person",
+        "name": "Article Author"
+      },
+      "datePublished": "2025-10-22T10:00:00Z",
+      "dateModified": "2025-10-22T10:00:00Z",
+      "image": ["http://localhost:8081/api/images/image-slug"],
+      "keywords": ["technology", "programming", "web"],
+      "articleBody": "Full article content...",
+      "url": "http://localhost:8080/content/example-article-slug"
+    }
+    </script>
+</head>
+<body>
+    <article>
+        <h1>Example Article</h1>
+        <div class="meta">
+            <span>By Article Author</span> • <time datetime="2025-10-22">2025-10-22</time>
+        </div>
+        <div class="keywords">
+            <span class="keyword">technology</span>
+            <span class="keyword">programming</span>
+            <span class="keyword">web</span>
+        </div>
+        <div class="content">
+            Full article content...
+        </div>
+    </article>
+</body>
+</html>
+```
+
+**Status Codes:**
+- `200 OK` - Content page served successfully
+- `404 Not Found` - Slug not found in database
+
+### Get XML Sitemap
+
+Generates an XML sitemap of all scraped content with slugs for search engine crawlers.
+
+**Request:**
+```http
+GET /sitemap.xml
+```
+
+**Response:**
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>http://localhost:8080/content/example-article-slug</loc>
+    <lastmod>2025-10-22T10:00:00Z</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>http://localhost:8080/content/another-article-slug</loc>
+    <lastmod>2025-10-21T14:30:00Z</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+</urlset>
+```
+
+**Headers:**
+- `Content-Type: application/xml; charset=utf-8`
+- `Cache-Control: public, max-age=3600`
+
+**Status Codes:**
+- `200 OK` - Sitemap generated successfully
+
+### Get Image Sitemap
+
+Generates an XML image sitemap for all images with slugs, following the Google Image Sitemap protocol.
+
+**Request:**
+```http
+GET /images-sitemap.xml
+```
+
+**Response:**
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+  <url>
+    <loc>http://localhost:8080/content/image-one</loc>
+    <image:image>
+      <image:loc>http://localhost:8080/images/image-one</image:loc>
+      <image:caption>Beautiful sunset over mountains</image:caption>
+      <image:title>Mountain Sunset</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>http://localhost:8080/content/image-two</loc>
+    <image:image>
+      <image:loc>http://localhost:8080/images/image-two</image:loc>
+      <image:caption>City skyline at night</image:caption>
+      <image:title>City Night View</image:title>
+    </image:image>
+  </url>
+</urlset>
+```
+
+**Headers:**
+- `Content-Type: application/xml; charset=utf-8`
+- `Cache-Control: public, max-age=3600`
+
+**Status Codes:**
+- `200 OK` - Image sitemap generated successfully
+
+### Get Robots.txt
+
+Serves the robots.txt file for search engine crawlers with sitemap references.
+
+**Request:**
+```http
+GET /robots.txt
+```
+
+**Response:**
+```
+User-agent: *
+Allow: /
+
+Sitemap: http://localhost:8080/sitemap.xml
+Sitemap: http://localhost:8080/images-sitemap.xml
+```
+
+**Headers:**
+- `Content-Type: text/plain; charset=utf-8`
+- `Cache-Control: public, max-age=86400`
+
+**Status Codes:**
+- `200 OK` - Robots.txt served successfully
 
 ---
 
@@ -1406,9 +1659,22 @@ CREATE TABLE requests (
     scraper_uuid TEXT,
     textanalyzer_uuid TEXT NOT NULL,
     tags_json TEXT NOT NULL,
-    metadata_json TEXT NOT NULL
+    metadata_json TEXT NOT NULL,
+    slug TEXT,
+    UNIQUE (slug) WHERE slug IS NOT NULL
 );
 ```
+
+**Columns:**
+- `id` - Unique identifier for the request
+- `created_at` - Timestamp when the request was created
+- `source_type` - Type of source (e.g., "url", "text")
+- `source_url` - Original URL if scraped from web
+- `scraper_uuid` - UUID of the scraper service record
+- `textanalyzer_uuid` - UUID of the text analyzer service record
+- `tags_json` - JSON array of tags
+- `metadata_json` - JSON object containing all metadata
+- `slug` - SEO-friendly URL slug for public content serving (nullable, unique)
 
 ### tags Table
 

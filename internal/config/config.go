@@ -15,6 +15,7 @@ type Config struct {
 	DatabasePath        string
 	LinkScoreThreshold  float64 // Minimum score for link recommendation (0.0-1.0)
 	GenerateMockData    bool    // Generate 6 months of mock historical data on startup (~600 documents)
+	WebInterfaceURL     string  // URL for the web interface (for footer links on static pages)
 }
 
 // Load reads configuration from environment variables
@@ -27,6 +28,7 @@ func Load() (*Config, error) {
 		DatabasePath:        getEnv("DATABASE_PATH", "./controller.db"),
 		LinkScoreThreshold:  getEnvAsFloat("LINK_SCORE_THRESHOLD", 0.5),
 		GenerateMockData:    getEnvAsBool("GENERATE_MOCK_DATA", false),
+		WebInterfaceURL:     getEnv("WEB_INTERFACE_URL", "http://localhost:5173"),
 	}
 
 	if err := config.Validate(); err != nil {
