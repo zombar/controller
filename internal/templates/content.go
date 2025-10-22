@@ -21,6 +21,9 @@ type ContentPageData struct {
 	JSONLDSchema     string
 	BaseURL          string
 	WebInterfaceURL  string
+	BestImageSlug    string   // Best scored image for mid-article insertion
+	RequestID        string   // Request ID for linking to admin interface
+	ScraperBaseURL   string   // Scraper service URL for image serving
 }
 
 // contentTemplate defines the HTML template for a content page
@@ -196,12 +199,12 @@ const contentTemplate = `<!DOCTYPE html>
 	<!-- Navigation -->
 	<nav class="navbar navbar-dark">
 		<div class="container">
-			<span class="navbar-brand mb-0 purple-title">
+			<a href="{{.WebInterfaceURL}}?doc={{.RequestID}}" class="navbar-brand mb-0 purple-title" style="text-decoration: none;">
 				<div style="display: flex; flex-direction: column;">
 					<span class="title-main">PurpleTab</span>
 					<span class="subtitle">For The Truth Seekers</span>
 				</div>
-			</span>
+			</a>
 		</div>
 	</nav>
 
@@ -233,7 +236,7 @@ const contentTemplate = `<!DOCTYPE html>
 			</article>
 
 			<footer>
-				<p class="mb-0">Powered by <a href="{{.WebInterfaceURL}}">PurpleTab</a></p>
+				<p class="mb-0">Powered by <a href="{{.WebInterfaceURL}}?doc={{.RequestID}}">PurpleTab</a></p>
 			</footer>
 		</div>
 	</div>

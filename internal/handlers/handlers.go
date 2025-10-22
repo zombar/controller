@@ -24,10 +24,11 @@ type Handler struct {
 	linkScoreThreshold float64
 	scrapeRequests     *scraper_requests.Manager
 	webInterfaceURL    string
+	scraperBaseURL     string
 }
 
 // New creates a new Handler
-func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, linkScoreThreshold float64, webInterfaceURL string) *Handler {
+func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, linkScoreThreshold float64, webInterfaceURL string, scraperBaseURL string) *Handler {
 	return &Handler{
 		storage:            store,
 		scraper:            scraper,
@@ -36,6 +37,7 @@ func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *c
 		linkScoreThreshold: linkScoreThreshold,
 		scrapeRequests:     scraper_requests.NewManager(),
 		webInterfaceURL:    webInterfaceURL,
+		scraperBaseURL:     scraperBaseURL,
 	}
 }
 

@@ -48,21 +48,55 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 	content := formatContentHTML(rawContent)
 	author := getString(scraperMeta, "author", "")
 
+	// Get base URL from config or request (needed early for image insertion)
+	baseURL := getBaseURL(r)
+
 	// Get keywords from tags
 	keywords := request.Tags
-
-	// Get base URL from config or request
-	baseURL := getBaseURL(r)
 	canonicalURL := fmt.Sprintf("%s/content/%s", baseURL, slug)
 
-	// Get OG image if available
+	// Select best thumbnail based on relevance score
 	var ogImage string
+	var bestImageSlug string
+	log.Printf("DEBUG: Processing images for slug %s, scraperBaseURL=%s", slug, h.scraperBaseURL)
 	if images, ok := scraperMeta["images"].([]interface{}); ok && len(images) > 0 {
-		if firstImg, ok := images[0].(map[string]interface{}); ok {
-			if imgSlug, ok := firstImg["slug"].(string); ok && imgSlug != "" {
-				ogImage = fmt.Sprintf("%s/images/%s", baseURL, imgSlug)
+		log.Printf("DEBUG: Found %d images in metadata", len(images))
+		// Find image with highest relevance score
+		var bestScore float64 = -1
+		for _, imgInterface := range images {
+			if img, ok := imgInterface.(map[string]interface{}); ok {
+				imgSlug, hasSlug := img["slug"].(string)
+				if !hasSlug || imgSlug == "" {
+					continue
+				}
+
+				// Get relevance score (default to 0.5 if not present)
+				relevanceScore := 0.5
+				if score, ok := img["relevance_score"].(float64); ok {
+					relevanceScore = score
+				}
+
+				if relevanceScore > bestScore {
+					bestScore = relevanceScore
+					bestImageSlug = imgSlug
+				}
 			}
 		}
+
+		// Use best scored image as OG image (served by scraper service)
+		if bestImageSlug != "" {
+			ogImage = fmt.Sprintf("%s/images/%s", h.scraperBaseURL, bestImageSlug)
+			log.Printf("Selected thumbnail %s with relevance score %.2f, URL: %s", bestImageSlug, bestScore, ogImage)
+
+			// Insert image midway through content (use scraper service URL)
+			log.Printf("DEBUG: Inserting image into content with baseURL=%s, slug=%s", h.scraperBaseURL, bestImageSlug)
+			content = insertImageInContent(content, h.scraperBaseURL, bestImageSlug)
+			log.Printf("DEBUG: Content length after image insertion: %d", len(content))
+		} else {
+			log.Printf("DEBUG: No bestImageSlug found")
+		}
+	} else {
+		log.Printf("DEBUG: No images found in scraper metadata")
 	}
 
 	// Generate JSON-LD schema
@@ -100,6 +134,9 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 		JSONLDSchema:    jsonLD,
 		BaseURL:         baseURL,
 		WebInterfaceURL: h.webInterfaceURL,
+		BestImageSlug:   bestImageSlug,   // Best scored image for mid-article insertion
+		RequestID:       request.ID,      // For linking to admin interface
+		ScraperBaseURL:  h.scraperBaseURL, // For image serving
 	}
 
 	html, err := templates.RenderContentPage(pageData)
@@ -222,6 +259,35 @@ Sitemap: %s/images-sitemap.xml
 	w.Write([]byte(robotsTxt))
 }
 
+// ServeImage serves an image by slug from the scraper service
+func (h *Handler) ServeImage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract slug from path: /images/{slug}
+	slug := strings.TrimPrefix(r.URL.Path, "/images/")
+	if slug == "" || slug == r.URL.Path {
+		http.Error(w, "Slug is required", http.StatusBadRequest)
+		return
+	}
+
+	// Search for image by slug in scraper service
+	// We need to get the image ID first, then serve the file
+	// For now, we'll construct the URL to proxy to the scraper service
+	// The scraper service will need to support image serving by slug
+
+	// Proxy the request to the scraper service
+	// For now, return a not implemented error - this needs to be wired up properly
+	http.Error(w, "Image serving by slug not yet implemented - use scraper service directly", http.StatusNotImplemented)
+
+	// TODO: Implement proper image lookup by slug and proxying from scraper service
+	// This requires either:
+	// 1. Adding a /images/{slug} endpoint to the scraper service
+	// 2. Or looking up the image ID by slug and proxying to /api/images/{id}/file
+}
+
 // Helper functions
 
 func getString(m map[string]interface{}, key, defaultValue string) string {
@@ -278,4 +344,55 @@ func formatContentHTML(content string) string {
 	}
 
 	return formatted.String()
+}
+
+// insertImageInContent inserts an image midway through the HTML content
+func insertImageInContent(content, baseURL, imageSlug string) string {
+	if content == "" || imageSlug == "" {
+		return content
+	}
+
+	// Split content into paragraphs (assuming it's already formatted as HTML)
+	paragraphs := strings.Split(content, "</p>")
+
+	// Filter out empty paragraphs
+	nonEmptyParagraphs := 0
+	for _, p := range paragraphs {
+		if strings.TrimSpace(p) != "" {
+			nonEmptyParagraphs++
+		}
+	}
+
+	// Need at least 3 paragraphs (since split creates extra empty entry)
+	if nonEmptyParagraphs < 3 {
+		return content // Not enough content to split
+	}
+
+	// Find midpoint
+	midpoint := len(paragraphs) / 2
+
+	// Create image HTML with pixel-perfect scaling and responsive design
+	imageHTML := fmt.Sprintf(`
+<figure class="article-image" style="margin: 2rem 0; text-align: center;">
+	<img src="%s/images/%s"
+	     alt="Article illustration"
+	     style="max-width: 100%%; height: auto; display: block; margin: 0 auto; image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges;"
+	     loading="lazy">
+</figure>`, baseURL, imageSlug)
+
+	// Insert image at midpoint
+	var result strings.Builder
+	for i, para := range paragraphs {
+		if para != "" {
+			result.WriteString(para)
+			result.WriteString("</p>")
+		}
+
+		// Insert image after midpoint paragraph
+		if i == midpoint {
+			result.WriteString(imageHTML)
+		}
+	}
+
+	return result.String()
 }

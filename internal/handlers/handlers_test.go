@@ -170,7 +170,7 @@ func setupTestHandler(t *testing.T) (*Handler, *httptest.Server, *httptest.Serve
 	scraperClient := clients.NewScraperClient(scraperMock.URL)
 	textAnalyzerClient := clients.NewTextAnalyzerClient(textAnalyzerMock.URL)
 
-	handler := New(store, scraperClient, textAnalyzerClient, nil, 0.5)
+	handler := New(store, scraperClient, textAnalyzerClient, nil, 0.5, "", scraperMock.URL)
 
 	cleanup := func() {
 		store.Close()

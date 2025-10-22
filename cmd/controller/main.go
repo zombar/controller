@@ -62,7 +62,7 @@ func main() {
 	schedulerClient := clients.NewSchedulerClient(cfg.SchedulerBaseURL)
 
 	// Initialize handlers
-	handler := handlers.New(store, scraperClient, textAnalyzerClient, schedulerClient, cfg.LinkScoreThreshold, cfg.WebInterfaceURL)
+	handler := handlers.New(store, scraperClient, textAnalyzerClient, schedulerClient, cfg.LinkScoreThreshold, cfg.WebInterfaceURL, cfg.ScraperBaseURL)
 
 	// Setup routes
 	mux := http.NewServeMux()
