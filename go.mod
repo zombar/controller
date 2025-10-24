@@ -6,6 +6,7 @@ toolchain go1.24.9
 
 require (
 	github.com/google/uuid v1.6.0
+	golang.org/x/text v0.30.0
 	modernc.org/sqlite v1.39.1
 )
 

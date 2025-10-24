@@ -25,7 +25,8 @@ type ScraperResponse struct {
 	ID       string                 `json:"id"`
 	URL      string                 `json:"url"`
 	Title    string                 `json:"title"`
-	Content  string                 `json:"content"`
+	Content  string                 `json:"content"`       // AI-cleaned content
+	RawText  string                 `json:"raw_text"`      // Original raw text extracted from HTML
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 	Score    *LinkScore             `json:"score,omitempty"` // Quality score for the URL
 	Slug     string                 `json:"slug,omitempty"`  // SEO-friendly URL slug
@@ -417,4 +418,39 @@ type ScrapedData struct {
 	Metadata       PageMetadata `json:"metadata"`
 	Score          *LinkScore   `json:"score,omitempty"`
 	Slug           string       `json:"slug,omitempty"` // SEO-friendly URL slug
+}
+
+// UpdateImageTags updates the tags for an image by ID
+func (c *ScraperClient) UpdateImageTags(imageID string, tags []string) error {
+	reqBody := struct {
+		Tags []string `json:"tags"`
+	}{Tags: tags}
+	
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequest(
+		http.MethodPut,
+		fmt.Sprintf("%s/api/images/%s/tags", c.baseURL, imageID),
+		bytes.NewBuffer(jsonData),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("failed to send request to scraper: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("scraper service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
 }

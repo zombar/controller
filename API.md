@@ -641,7 +641,7 @@ Content-Type: application/json
 
 **Notes:**
 - Returns existing request if URL is already being processed
-- Requests automatically expire and are removed after 15 minutes
+- Requests automatically expire and are removed after 24 hours
 - Background processing includes scoring, scraping, and analysis
 - URLs below quality threshold will fail with error message
 

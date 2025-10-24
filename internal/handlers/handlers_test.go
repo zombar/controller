@@ -3,6 +3,7 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,8 @@ func mockScraperServer() *httptest.Server {
 				ID:      "scraper-test-uuid",
 				URL:     "https://example.com",
 				Content: "This is the main text from the scraped page.",
+				RawText: "This is the raw HTML text before AI cleaning.",
+				Slug:    "example-page",
 				Metadata: map[string]interface{}{
 					"title": "Example Page",
 				},
@@ -157,7 +160,8 @@ func mockTextAnalyzerServer() *httptest.Server {
 }
 
 func setupTestHandler(t *testing.T) (*Handler, *httptest.Server, *httptest.Server, func()) {
-	dbPath := "test_handlers.db"
+	// Create a unique database file for each test to avoid interference
+	dbPath := fmt.Sprintf("test_handlers_%s.db", strings.ReplaceAll(t.Name(), "/", "_"))
 
 	store, err := storage.New(dbPath)
 	if err != nil {
@@ -241,8 +245,20 @@ func TestScrapeURL(t *testing.T) {
 	if response.TextAnalyzerUUID != "analyzer-test-uuid" {
 		t.Errorf("Expected analyzer UUID 'analyzer-test-uuid', got '%s'", response.TextAnalyzerUUID)
 	}
-	if len(response.Tags) != 3 {
-		t.Errorf("Expected 3 tags, got %d", len(response.Tags))
+	// Expect 4 tags: 3 from analyzer + 1 domain tag (example.com)
+	if len(response.Tags) != 4 {
+		t.Errorf("Expected 4 tags (3 from analyzer + domain), got %d: %v", len(response.Tags), response.Tags)
+	}
+	// Verify domain tag is present
+	hasDomainTag := false
+	for _, tag := range response.Tags {
+		if tag == "example.com" {
+			hasDomainTag = true
+			break
+		}
+	}
+	if !hasDomainTag {
+		t.Error("Expected domain tag 'example.com' to be present in tags")
 	}
 }
 
@@ -381,14 +397,18 @@ func TestListRequests(t *testing.T) {
 	handler, _, _, cleanup := setupTestHandler(t)
 	defer cleanup()
 
-	// Create multiple requests
+	// Create multiple requests with unique text
 	for i := 0; i < 3; i++ {
-		analyzeReq := AnalyzeTextRequest{Text: "Test text"}
+		analyzeReq := AnalyzeTextRequest{Text: fmt.Sprintf("Test text %d", i)}
 		jsonData, _ := json.Marshal(analyzeReq)
 		req := httptest.NewRequest(http.MethodPost, "/api/analyze", bytes.NewBuffer(jsonData))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		handler.AnalyzeText(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("Failed to create request %d: status %d, body: %s", i, w.Code, w.Body.String())
+		}
 	}
 
 	// List requests
@@ -589,6 +609,33 @@ func TestScrapeURLWithLowScore(t *testing.T) {
 	if linkScore["score"].(float64) != 0.3 {
 		t.Errorf("Expected link score 0.3, got %v", linkScore["score"])
 	}
+
+	// Check that low-quality content is automatically tombstoned (3 days)
+	if metadata["tombstone_datetime"] == nil {
+		t.Fatal("Expected tombstone_datetime for low-quality content")
+	}
+
+	tombstoneStr, ok := metadata["tombstone_datetime"].(string)
+	if !ok {
+		t.Fatal("Expected tombstone_datetime to be a string")
+	}
+
+	tombstoneTime, err := time.Parse(time.RFC3339, tombstoneStr)
+	if err != nil {
+		t.Fatalf("Failed to parse tombstone_datetime: %v", err)
+	}
+
+	// Should be approximately 72 hours (3 days) from now (allow 1 minute tolerance)
+	expectedTime := time.Now().UTC().Add(72 * time.Hour)
+	diff := tombstoneTime.Sub(expectedTime)
+	if diff < -time.Minute || diff > time.Minute {
+		t.Errorf("Expected tombstone_datetime around %v (3 days from now), got %v (diff: %v)", expectedTime, tombstoneTime, diff)
+	}
+
+	// Verify SEO is disabled for low-quality content
+	if response.SEOEnabled {
+		t.Error("Expected SEOEnabled to be false for low-quality content")
+	}
 }
 
 func TestScrapeURLWithHighScore(t *testing.T) {
@@ -642,6 +689,16 @@ func TestScrapeURLWithHighScore(t *testing.T) {
 
 	if _, ok := metadata["analyzer_metadata"]; !ok {
 		t.Error("Expected analyzer_metadata in response")
+	}
+
+	// Verify SEO is enabled for high-quality content
+	if !response.SEOEnabled {
+		t.Error("Expected SEOEnabled to be true for high-quality content")
+	}
+
+	// Verify slug was generated for high-quality content
+	if response.Slug == nil || *response.Slug == "" {
+		t.Error("Expected slug to be generated for high-quality content")
 	}
 }
 
@@ -1263,14 +1320,32 @@ func TestTombstoneRequest(t *testing.T) {
 		t.Errorf("Expected status 200, got %d. Body: %s", w.Code, w.Body.String())
 	}
 
-	// Verify the request has tombstone_datetime in metadata
+	// Verify the request has tombstone_datetime in metadata (90 days from now)
 	retrieved, err := store.GetRequest("tombstone-req-1")
 	if err != nil {
 		t.Fatalf("Failed to get request: %v", err)
 	}
 
 	if retrieved.Metadata["tombstone_datetime"] == nil {
-		t.Error("Expected tombstone_datetime in metadata")
+		t.Fatal("Expected tombstone_datetime in metadata")
+	}
+
+	// Parse tombstone datetime and verify it's 90 days from now
+	tombstoneStr, ok := retrieved.Metadata["tombstone_datetime"].(string)
+	if !ok {
+		t.Fatal("Expected tombstone_datetime to be a string")
+	}
+
+	tombstoneTime, err := time.Parse(time.RFC3339, tombstoneStr)
+	if err != nil {
+		t.Fatalf("Failed to parse tombstone_datetime: %v", err)
+	}
+
+	// Should be approximately 90 days from now (allow 1 minute tolerance)
+	expectedTime := time.Now().UTC().Add(90 * 24 * time.Hour)
+	diff := tombstoneTime.Sub(expectedTime)
+	if diff < -time.Minute || diff > time.Minute {
+		t.Errorf("Expected tombstone_datetime around %v (90 days from now), got %v (diff: %v)", expectedTime, tombstoneTime, diff)
 	}
 }
 
@@ -1642,6 +1717,180 @@ func TestGetTimelineExtents(t *testing.T) {
 			if w.Code != http.StatusMethodNotAllowed {
 				t.Errorf("Expected status 405 for %s method, got %d", method, w.Code)
 			}
+		}
+	})
+}
+
+func TestUpdateRequestTags(t *testing.T) {
+	t.Run("successfully update tags", func(t *testing.T) {
+		handler, _, _, cleanup := setupTestHandler(t)
+		defer cleanup()
+
+		// Create a test request first
+		scraperUUID := "test-uuid"
+		testReq := &storage.Request{
+			ID:               "test-request-1",
+			CreatedAt:        time.Now().UTC(),
+			SourceType:       "url",
+			ScraperUUID:      &scraperUUID,
+			TextAnalyzerUUID: "analyzer-1",
+			Tags:             []string{"initial", "tag"},
+			Metadata: map[string]interface{}{
+				"url":     "https://example.com",
+				"title":   "Test",
+				"content": "Test content",
+			},
+		}
+		if err := handler.storage.SaveRequest(testReq); err != nil {
+			t.Fatalf("Failed to save test request: %v", err)
+		}
+
+		// Update tags
+		newTags := []string{"updated", "tags", "example.com"}
+		reqBody, _ := json.Marshal(map[string][]string{"tags": newTags})
+		req := httptest.NewRequest(http.MethodPut, "/api/requests/test-request-1/tags", bytes.NewReader(reqBody))
+		w := httptest.NewRecorder()
+
+		handler.UpdateRequestTags(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		// Verify tags were updated
+		updated, err := handler.storage.GetRequest("test-request-1")
+		if err != nil {
+			t.Fatalf("Failed to get updated request: %v", err)
+		}
+
+		if len(updated.Tags) != len(newTags) {
+			t.Errorf("Expected %d tags, got %d", len(newTags), len(updated.Tags))
+		}
+
+		for i, tag := range newTags {
+			if updated.Tags[i] != tag {
+				t.Errorf("Expected tag %s at position %d, got %s", tag, i, updated.Tags[i])
+			}
+		}
+	})
+
+	t.Run("request not found", func(t *testing.T) {
+		handler, _, _, cleanup := setupTestHandler(t)
+		defer cleanup()
+
+		reqBody, _ := json.Marshal(map[string][]string{"tags": {"test"}})
+		req := httptest.NewRequest(http.MethodPut, "/api/requests/nonexistent/tags", bytes.NewReader(reqBody))
+		w := httptest.NewRecorder()
+
+		handler.UpdateRequestTags(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("Expected status 404, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("invalid request body", func(t *testing.T) {
+		handler, _, _, cleanup := setupTestHandler(t)
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/api/requests/test-id/tags", bytes.NewReader([]byte("invalid json")))
+		w := httptest.NewRecorder()
+
+		handler.UpdateRequestTags(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("Expected status 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("method not allowed", func(t *testing.T) {
+		handler, _, _, cleanup := setupTestHandler(t)
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/api/requests/test-id/tags", nil)
+		w := httptest.NewRecorder()
+
+		handler.UpdateRequestTags(w, req)
+
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("Expected status 405, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+func TestUpdateImageTags(t *testing.T) {
+	t.Run("successfully update image tags", func(t *testing.T) {
+		handler, scraperServer, _, cleanup := setupTestHandler(t)
+		defer cleanup()
+
+		// Mock scraper response for updating image tags
+		testImageID := "test-image-1"
+		scraperServer.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPut && r.URL.Path == "/api/images/"+testImageID+"/tags" {
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(map[string]string{"message": "Image tags updated successfully"})
+				return
+			}
+			http.Error(w, "Not found", http.StatusNotFound)
+		})
+
+		newTags := []string{"updated", "image", "tags"}
+		reqBody, _ := json.Marshal(map[string][]string{"tags": newTags})
+		req := httptest.NewRequest(http.MethodPut, "/api/images/"+testImageID+"/tags", bytes.NewReader(reqBody))
+		w := httptest.NewRecorder()
+
+		handler.UpdateImageTags(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("image not found", func(t *testing.T) {
+		handler, scraperServer, _, cleanup := setupTestHandler(t)
+		defer cleanup()
+
+		// Mock scraper response for image not found
+		scraperServer.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "image not found", http.StatusNotFound)
+		})
+
+		reqBody, _ := json.Marshal(map[string][]string{"tags": {"test"}})
+		req := httptest.NewRequest(http.MethodPut, "/api/images/nonexistent/tags", bytes.NewReader(reqBody))
+		w := httptest.NewRecorder()
+
+		handler.UpdateImageTags(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("Expected status 404, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("invalid request body", func(t *testing.T) {
+		handler, _, _, cleanup := setupTestHandler(t)
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodPut, "/api/images/test-id/tags", bytes.NewReader([]byte("invalid json")))
+		w := httptest.NewRecorder()
+
+		handler.UpdateImageTags(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("Expected status 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("method not allowed", func(t *testing.T) {
+		handler, _, _, cleanup := setupTestHandler(t)
+		defer cleanup()
+
+		req := httptest.NewRequest(http.MethodGet, "/api/images/test-id/tags", nil)
+		w := httptest.NewRecorder()
+
+		handler.UpdateImageTags(w, req)
+
+		if w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("Expected status 405, got %d: %s", w.Code, w.Body.String())
 		}
 	})
 }

@@ -48,7 +48,7 @@ func TestCreate(t *testing.T) {
 		t.Error("Expected expiration in the future")
 	}
 
-	expectedExpiration := time.Now().Add(15 * time.Minute)
+	expectedExpiration := time.Now().Add(24 * time.Hour)
 	if req.ExpiresAt.Before(expectedExpiration.Add(-1*time.Second)) ||
 		req.ExpiresAt.After(expectedExpiration.Add(1*time.Second)) {
 		t.Errorf("Expected expiration around %v, got %v", expectedExpiration, req.ExpiresAt)
@@ -312,9 +312,9 @@ func TestExpirationTime(t *testing.T) {
 	manager := NewManager()
 	url := "https://example.com"
 
-	before := time.Now().Add(15 * time.Minute)
+	before := time.Now().Add(24 * time.Hour)
 	req, _ := manager.Create(url, false)
-	after := time.Now().Add(15 * time.Minute)
+	after := time.Now().Add(24 * time.Hour)
 
 	if req.ExpiresAt.Before(before.Add(-1*time.Second)) {
 		t.Error("Expiration time too early")

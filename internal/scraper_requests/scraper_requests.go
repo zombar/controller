@@ -30,7 +30,7 @@ type ScrapeRequest struct {
 	UpdatedAt        time.Time           `json:"updated_at"`
 	ResultRequestID  string              `json:"result_request_id,omitempty"` // Controller request ID when completed
 	ErrorMessage     string              `json:"error_message,omitempty"`
-	ExpiresAt        time.Time           `json:"expires_at"` // Auto-cleanup after 15 minutes
+	ExpiresAt        time.Time           `json:"expires_at"` // Auto-cleanup after 24 hours
 }
 
 // Manager handles in-memory scrape request tracking
@@ -79,7 +79,7 @@ func (m *Manager) Create(url string, extractLinks bool) (*ScrapeRequest, bool) {
 		Progress:     0,
 		CreatedAt:    now,
 		UpdatedAt:    now,
-		ExpiresAt:    now.Add(15 * time.Minute),
+		ExpiresAt:    now.Add(24 * time.Hour),
 	}
 
 	m.requests[req.ID] = req
@@ -104,7 +104,7 @@ func (m *Manager) CreateText(text string) (*ScrapeRequest, bool) {
 		Progress:   0,
 		CreatedAt:  now,
 		UpdatedAt:  now,
-		ExpiresAt:  now.Add(15 * time.Minute),
+		ExpiresAt:  now.Add(24 * time.Hour),
 	}
 
 	m.requests[req.ID] = req
