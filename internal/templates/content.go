@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"math/rand"
 	"strings"
+	"time"
 )
 
 // ContentPageData contains data for rendering a content page
@@ -24,6 +26,7 @@ type ContentPageData struct {
 	BestImageSlug    string   // Best scored image for mid-article insertion
 	RequestID        string   // Request ID for linking to admin interface
 	ScraperBaseURL   string   // Scraper service URL for image serving
+	SourceURL        string   // Original source URL for the article
 }
 
 // contentTemplate defines the HTML template for a content page
@@ -193,6 +196,38 @@ const contentTemplate = `<!DOCTYPE html>
 			color: var(--purple-dark);
 			text-decoration: underline;
 		}
+		.original-link-box {
+			display: flex;
+			align-items: flex-start;
+			gap: 1rem;
+			padding: 1rem 1.25rem;
+			margin: 2rem 0;
+			background-color: #d1ecf1;
+			border: 1px solid #bee5eb;
+			border-radius: 0.375rem;
+			color: #0c5460;
+		}
+		.original-link-icon {
+			font-size: 1.5rem;
+			line-height: 1;
+			flex-shrink: 0;
+		}
+		.original-link-content {
+			flex: 1;
+		}
+		.original-link-content strong {
+			display: block;
+			margin-bottom: 0.25rem;
+			color: #0c5460;
+		}
+		.original-link {
+			color: #0c5460;
+			text-decoration: underline;
+			font-weight: 600;
+		}
+		.original-link:hover {
+			color: #062c33;
+		}
 	</style>
 </head>
 <body>
@@ -233,6 +268,18 @@ const contentTemplate = `<!DOCTYPE html>
 				<div class="content">
 					{{.Content | safeHTML}}
 				</div>
+
+				{{if .SourceURL}}
+				<div class="original-link-box">
+					<div class="original-link-icon">ℹ️</div>
+					<div class="original-link-content">
+						<strong>{{randomPhrase}}</strong>
+						<a href="{{.SourceURL}}" target="_blank" rel="noopener noreferrer" class="original-link">
+							View the original article
+						</a>
+					</div>
+				</div>
+				{{end}}
 			</article>
 
 			<footer>
@@ -243,6 +290,35 @@ const contentTemplate = `<!DOCTYPE html>
 </body>
 </html>`
 
+// Humorous and encouraging phrases for the original article link
+var originalArticlePhrases = []string{
+	"Feeling adventurous? 🚀",
+	"Want to see where this all began? 🔍",
+	"Curious about the source? 🤔",
+	"Ready for the full story? 📖",
+	"Let's visit the OG article! 🎯",
+	"Time to see the original masterpiece! 🎨",
+	"Brave enough for the source? 💪",
+	"Want the unfiltered version? 🎭",
+	"Let's check out the mothership! 🛸",
+	"Feeling like an investigator? 🕵️",
+	"Ready to go down the rabbit hole? 🐰",
+	"Shall we visit the primary source? 📚",
+	"Fancy seeing where it all started? 🌟",
+	"Up for some fact-checking? ✅",
+	"Let's see what the original author said! 👀",
+}
+
+// Initialize random seed
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+// getRandomPhrase returns a random phrase from the list
+func getRandomPhrase() string {
+	return originalArticlePhrases[rand.Intn(len(originalArticlePhrases))]
+}
+
 // RenderContentPage renders a content page with SEO optimizations
 func RenderContentPage(data ContentPageData) (string, error) {
 	// Create template with custom functions
@@ -251,6 +327,7 @@ func RenderContentPage(data ContentPageData) (string, error) {
 		"safeHTML": func(s string) template.HTML {
 			return template.HTML(s)
 		},
+		"randomPhrase": getRandomPhrase,
 	}
 
 	tmpl, err := template.New("content").Funcs(funcMap).Parse(contentTemplate)

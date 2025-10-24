@@ -37,6 +37,13 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if SEO is enabled for this document
+	if !request.SEOEnabled {
+		log.Printf("SEO disabled for request %s (slug: %s)", request.ID, slug)
+		http.Error(w, "SEO page not available for this content", http.StatusNotFound)
+		return
+	}
+
 	// Extract metadata
 	scraperMeta, _ := request.Metadata["scraper_metadata"].(map[string]interface{})
 	textMeta, _ := request.Metadata["text_analysis"].(map[string]interface{})
@@ -46,7 +53,13 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 	description := getString(scraperMeta, "description", "")
 	rawContent := getString(textMeta, "content", getString(scraperMeta, "content", ""))
 	content := formatContentHTML(rawContent)
+
+	// Get author and validate it's not a URL
 	author := getString(scraperMeta, "author", "")
+	if isURL(author) {
+		log.Printf("Author field contains URL, clearing it: %s", author)
+		author = ""
+	}
 
 	// Get base URL from config or request (needed early for image insertion)
 	baseURL := getBaseURL(r)
@@ -121,6 +134,12 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 		jsonLD = ""
 	}
 
+	// Prepare source URL (dereference pointer or use empty string)
+	sourceURL := ""
+	if request.SourceURL != nil {
+		sourceURL = *request.SourceURL
+	}
+
 	// Render HTML template
 	pageData := templates.ContentPageData{
 		Title:           title,
@@ -137,6 +156,7 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 		BestImageSlug:   bestImageSlug,   // Best scored image for mid-article insertion
 		RequestID:       request.ID,      // For linking to admin interface
 		ScraperBaseURL:  h.scraperBaseURL, // For image serving
+		SourceURL:       sourceURL,       // Original source URL
 	}
 
 	html, err := templates.RenderContentPage(pageData)
@@ -298,6 +318,16 @@ func getString(m map[string]interface{}, key, defaultValue string) string {
 		return val
 	}
 	return defaultValue
+}
+
+// isURL checks if a string appears to be a URL
+func isURL(s string) bool {
+	s = strings.TrimSpace(s)
+	// Check for common URL patterns
+	return strings.HasPrefix(s, "http://") ||
+		strings.HasPrefix(s, "https://") ||
+		strings.HasPrefix(s, "www.") ||
+		strings.Contains(s, "://")
 }
 
 func getBaseURL(r *http.Request) string {

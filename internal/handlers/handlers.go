@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/zombar/controller/internal/clients"
 	"github.com/zombar/controller/internal/scraper_requests"
+	internalslug "github.com/zombar/controller/internal/slug"
 	"github.com/zombar/controller/internal/storage"
 )
 
@@ -81,6 +83,7 @@ type ControllerResponse struct {
 	Tags             []string               `json:"tags"`
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
 	Slug             *string                `json:"slug,omitempty"`
+	SEOEnabled       bool                   `json:"seo_enabled"`
 }
 
 // ErrorResponse represents an error response
@@ -127,13 +130,22 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 
 	// Check if score meets threshold (skip for image URLs)
 	if !isImageURL && scoreResp.Score.Score < h.linkScoreThreshold {
-		// Score is below threshold - return scoring metadata only
+		// Score is below threshold - mark for tombstoning and return scoring metadata only
+		tombstoneTime := time.Now().UTC().Add(72 * time.Hour) // Tombstone in 3 days
+
+		// Add domain name to tags
+		tags := scoreResp.Score.Categories
+		if domain := extractDomainTag(req.URL); domain != "" {
+			tags = append(tags, domain)
+		}
+
 		record := &storage.Request{
 			ID:         controllerID,
 			CreatedAt:  time.Now().UTC(),
 			SourceType: "url",
 			SourceURL:  &req.URL,
-			Tags:       scoreResp.Score.Categories,
+			Tags:       tags,
+			SEOEnabled: false, // Disable SEO for below-threshold content
 			Metadata: map[string]interface{}{
 				"link_score": map[string]interface{}{
 					"score":                scoreResp.Score.Score,
@@ -142,8 +154,9 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 					"is_recommended":       scoreResp.Score.IsRecommended,
 					"malicious_indicators": scoreResp.Score.MaliciousIndicators,
 				},
-				"below_threshold": true,
-				"threshold":       h.linkScoreThreshold,
+				"below_threshold":    true,
+				"threshold":          h.linkScoreThreshold,
+				"tombstone_datetime": tombstoneTime.Format(time.RFC3339), // Auto-tombstone low quality content
 			},
 		}
 
@@ -161,6 +174,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 			Tags:          record.Tags,
 			Metadata:      record.Metadata,
 			Slug:          record.Slug,
+			SEOEnabled:    record.SEOEnabled,
 		}
 
 		respondJSON(w, response, http.StatusCreated)
@@ -178,6 +192,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 	scraperMetadata := make(map[string]interface{})
 	scraperMetadata["title"] = scraperResp.Title
 	scraperMetadata["content"] = scraperResp.Content
+	scraperMetadata["raw_text"] = scraperResp.RawText // Include original raw text
 	scraperMetadata["url"] = scraperResp.URL
 
 	// Also include fields from the scraper's Metadata (description, keywords, etc.)
@@ -237,6 +252,11 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Add domain name to tags
+	if domain := extractDomainTag(req.URL); domain != "" {
+		tags = append(tags, domain)
+	}
+
 	// Extract slug from scraper response if available
 	var slug *string
 	if scraperResp.Slug != "" {
@@ -253,6 +273,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		Tags:             tags,
 		Metadata:         combinedMetadata,
 		Slug:             slug,
+		SEOEnabled:       true, // Enable SEO by default
 	}
 
 	if err := h.storage.SaveRequest(record); err != nil {
@@ -272,6 +293,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		Tags:             record.Tags,
 		Metadata:         record.Metadata,
 		Slug:             record.Slug,
+		SEOEnabled:       record.SEOEnabled,
 	}
 
 	respondJSON(w, response, http.StatusCreated)
@@ -304,6 +326,30 @@ func (h *Handler) AnalyzeText(w http.ResponseWriter, r *http.Request) {
 
 	// Create controller request record
 	controllerID := uuid.New().String()
+
+	// Generate slug from cleaned text or first few words
+	var slug *string
+	textForSlug := ""
+
+	// Try to get cleaned_text from metadata
+	if cleanedText, ok := analyzerResp.Metadata["cleaned_text"].(string); ok && cleanedText != "" {
+		// Use first 100 chars of cleaned text for slug
+		textForSlug = cleanedText
+		if len(textForSlug) > 100 {
+			textForSlug = textForSlug[:100]
+		}
+	} else if req.Text != "" {
+		// Fallback to first 100 chars of original text
+		textForSlug = req.Text
+		if len(textForSlug) > 100 {
+			textForSlug = textForSlug[:100]
+		}
+	}
+
+	if textForSlug != "" {
+		generatedSlug := internalslug.GenerateWithFallback(textForSlug, controllerID)
+		slug = &generatedSlug
+	}
 	record := &storage.Request{
 		ID:               controllerID,
 		CreatedAt:        time.Now().UTC(),
@@ -314,6 +360,8 @@ func (h *Handler) AnalyzeText(w http.ResponseWriter, r *http.Request) {
 			"analyzer_metadata": analyzerResp.Metadata,
 			"original_text":     req.Text, // Store original submitted text
 		},
+		Slug:             slug,
+		SEOEnabled:       true, // Enable SEO by default
 	}
 
 	if err := h.storage.SaveRequest(record); err != nil {
@@ -331,6 +379,7 @@ func (h *Handler) AnalyzeText(w http.ResponseWriter, r *http.Request) {
 		Tags:             record.Tags,
 		Metadata:         record.Metadata,
 		Slug:             record.Slug,
+		SEOEnabled:       record.SEOEnabled,
 	}
 
 	respondJSON(w, response, http.StatusCreated)
@@ -514,6 +563,66 @@ func (h *Handler) GetRequest(w http.ResponseWriter, r *http.Request) {
 		Tags:             record.Tags,
 		Metadata:         record.Metadata,
 		Slug:             record.Slug,
+		SEOEnabled:       record.SEOEnabled,
+	}
+
+	respondJSON(w, response, http.StatusOK)
+}
+
+// UpdateSEOEnabled updates the SEO enabled status for a request
+func (h *Handler) UpdateSEOEnabled(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract request ID from path: /api/requests/{id}/seo-enabled
+	path := r.URL.Path
+	parts := strings.Split(path, "/")
+	if len(parts) < 4 {
+		respondError(w, "Invalid request path", http.StatusBadRequest)
+		return
+	}
+	id := parts[3]
+
+	// Parse request body
+	var req struct {
+		SEOEnabled bool `json:"seo_enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Update SEO enabled status
+	if err := h.storage.UpdateSEOEnabled(id, req.SEOEnabled); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			respondError(w, "Request not found", http.StatusNotFound)
+			return
+		}
+		respondError(w, fmt.Sprintf("Failed to update SEO enabled status: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Get updated request
+	record, err := h.storage.GetRequest(id)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to get updated request: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := ControllerResponse{
+		ID:               record.ID,
+		CreatedAt:        record.CreatedAt,
+		EffectiveDate:    record.EffectiveDate,
+		SourceType:       record.SourceType,
+		SourceURL:        record.SourceURL,
+		ScraperUUID:      record.ScraperUUID,
+		TextAnalyzerUUID: record.TextAnalyzerUUID,
+		Tags:             record.Tags,
+		Metadata:         record.Metadata,
+		Slug:             record.Slug,
+		SEOEnabled:       record.SEOEnabled,
 	}
 
 	respondJSON(w, response, http.StatusOK)
@@ -616,11 +725,12 @@ func (h *Handler) TombstoneRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add tombstone_datetime to metadata
+	// Add tombstone_datetime to metadata (90 days from now)
 	if record.Metadata == nil {
 		record.Metadata = make(map[string]interface{})
 	}
-	record.Metadata["tombstone_datetime"] = time.Now().UTC().Format(time.RFC3339)
+	tombstoneTime := time.Now().UTC().Add(90 * 24 * time.Hour) // 90 days
+	record.Metadata["tombstone_datetime"] = tombstoneTime.Format(time.RFC3339)
 
 	// Update the request in storage
 	if err := h.storage.UpdateRequestMetadata(id, record.Metadata); err != nil {
@@ -720,6 +830,90 @@ func (h *Handler) UntombstoneImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, map[string]string{"message": "Image tombstone removed successfully"}, http.StatusOK)
+}
+
+// UpdateRequestTags updates the tags for a specific request
+func (h *Handler) UpdateRequestTags(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract ID from URL path: /api/requests/{id}/tags
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) < 4 {
+		respondError(w, "Invalid URL path", http.StatusBadRequest)
+		return
+	}
+	id := parts[len(parts)-2] // ID is second-to-last part
+
+	if id == "" {
+		respondError(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Parse request body
+	var req struct {
+		Tags []string `json:"tags"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Update tags in storage
+	if err := h.storage.UpdateRequestTags(id, req.Tags); err != nil {
+		if err.Error() == "request not found" {
+			respondError(w, "Request not found", http.StatusNotFound)
+			return
+		}
+		respondError(w, fmt.Sprintf("Failed to update tags: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, map[string]string{"message": "Tags updated successfully"}, http.StatusOK)
+}
+
+// UpdateImageTags updates the tags for a specific image
+func (h *Handler) UpdateImageTags(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract ID from URL path: /api/images/{id}/tags
+	parts := strings.Split(r.URL.Path, "/")
+	if len(parts) < 4 {
+		respondError(w, "Invalid URL path", http.StatusBadRequest)
+		return
+	}
+	id := parts[len(parts)-2] // ID is second-to-last part
+
+	if id == "" {
+		respondError(w, "Image ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Parse request body
+	var req struct {
+		Tags []string `json:"tags"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Update tags via scraper service
+	if err := h.scraper.UpdateImageTags(id, req.Tags); err != nil {
+		if strings.Contains(err.Error(), "image not found") {
+			respondError(w, "Image not found", http.StatusNotFound)
+			return
+		}
+		respondError(w, fmt.Sprintf("Failed to update image tags: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	respondJSON(w, map[string]string{"message": "Image tags updated successfully"}, http.StatusOK)
 }
 
 // ListRequests lists all requests with pagination
@@ -1134,7 +1328,44 @@ func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
 
 	// Check score threshold (skip for image URLs)
 	if !isImageURL && scoreResp.Score.Score < h.linkScoreThreshold {
-		h.scrapeRequests.SetFailed(id, fmt.Sprintf("URL score (%.2f) below threshold (%.2f)", scoreResp.Score.Score, h.linkScoreThreshold))
+		// Save a tombstoned record for low-quality content
+		tombstoneTime := time.Now().UTC().Add(72 * time.Hour) // Tombstone in 3 days
+		requestID := uuid.New().String()
+
+		// Add domain name to tags
+		tags := scoreResp.Score.Categories
+		if domain := extractDomainTag(url); domain != "" {
+			tags = append(tags, domain)
+		}
+
+		record := &storage.Request{
+			ID:         requestID,
+			CreatedAt:  time.Now().UTC(),
+			SourceType: "url",
+			SourceURL:  &url,
+			Tags:       tags,
+			SEOEnabled: false, // Disable SEO for below-threshold content
+			Metadata: map[string]interface{}{
+				"link_score": map[string]interface{}{
+					"score":                scoreResp.Score.Score,
+					"reason":               scoreResp.Score.Reason,
+					"categories":           scoreResp.Score.Categories,
+					"is_recommended":       scoreResp.Score.IsRecommended,
+					"malicious_indicators": scoreResp.Score.MaliciousIndicators,
+				},
+				"below_threshold":    true,
+				"threshold":          h.linkScoreThreshold,
+				"tombstone_datetime": tombstoneTime.Format(time.RFC3339), // Auto-tombstone low quality content
+			},
+		}
+
+		if err := h.storage.SaveRequest(record); err != nil {
+			h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to save low-quality record: %v", err))
+			return
+		}
+
+		h.scrapeRequests.SetCompleted(id, requestID)
+		log.Printf("Low-quality URL marked for tombstoning: %s (score: %.2f, threshold: %.2f)", url, scoreResp.Score.Score, h.linkScoreThreshold)
 		return
 	}
 
@@ -1151,6 +1382,7 @@ func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
 	scraperMetadata := make(map[string]interface{})
 	scraperMetadata["title"] = scrapeResp.Title
 	scraperMetadata["content"] = scrapeResp.Content
+	scraperMetadata["raw_text"] = scrapeResp.RawText // Include original raw text
 	scraperMetadata["url"] = scrapeResp.URL
 
 	// Also include fields from the scraper's Metadata (description, keywords, etc.)
@@ -1216,6 +1448,11 @@ func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
 		}
 	}
 
+	// Add domain name to tags
+	if domain := extractDomainTag(url); domain != "" {
+		tags = append(tags, domain)
+	}
+
 	// Extract slug from scraper response if available
 	var slug *string
 	if scrapeResp.Slug != "" {
@@ -1232,6 +1469,7 @@ func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
 		Tags:             tags,
 		Metadata:         combinedMetadata,
 		Slug:             slug,
+		SEOEnabled:       true, // Enable SEO by default
 	}
 
 	if err := h.storage.SaveRequest(req); err != nil {
@@ -1297,12 +1535,37 @@ func (h *Handler) processTextAnalysisRequest(id, text string) {
 
 	// Save to database
 	requestID := uuid.New().String()
+
+	// Generate slug from cleaned text or original text
+	var slug *string
+	textForSlug := ""
+
+	// Try to get cleaned_text from metadata
+	if cleanedText, ok := analyzeResp.Metadata["cleaned_text"].(string); ok && cleanedText != "" {
+		textForSlug = cleanedText
+		if len(textForSlug) > 100 {
+			textForSlug = textForSlug[:100]
+		}
+	} else if text != "" {
+		textForSlug = text
+		if len(textForSlug) > 100 {
+			textForSlug = textForSlug[:100]
+		}
+	}
+
+	if textForSlug != "" {
+		generatedSlug := internalslug.GenerateWithFallback(textForSlug, requestID)
+		slug = &generatedSlug
+	}
+
 	req := &storage.Request{
 		ID:               requestID,
 		CreatedAt:        time.Now(),
 		SourceType:       "text",
 		TextAnalyzerUUID: analyzeResp.ID,
 		Tags:             analyzeResp.GetTags(),
+		Slug:             slug,
+		SEOEnabled:       true, // Enable SEO by default
 		Metadata: map[string]interface{}{
 			"analyzer_metadata": analyzeResp.Metadata,
 			"original_text":     text, // Store original submitted text
@@ -1457,4 +1720,19 @@ func respondError(w http.ResponseWriter, message string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(ErrorResponse{Error: message})
+}
+
+// extractDomainTag extracts a clean domain name from a URL to use as a tag
+// Returns the domain name without "www." prefix, or empty string if parsing fails
+func extractDomainTag(urlStr string) string {
+	parsed, err := url.Parse(urlStr)
+	if err != nil {
+		return ""
+	}
+
+	domain := parsed.Hostname()
+	// Remove "www." prefix if present
+	domain = strings.TrimPrefix(domain, "www.")
+
+	return domain
 }

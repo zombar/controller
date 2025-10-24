@@ -87,12 +87,32 @@ func main() {
 			return
 		}
 
+		// Handle /api/requests/{id}/seo-enabled
+		if len(r.URL.Path) > len("/api/requests/") && r.URL.Path[len(r.URL.Path)-12:] == "/seo-enabled" {
+			if r.Method == http.MethodPut {
+				handler.UpdateSEOEnabled(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
 		// Handle /api/requests/{id}/tombstone
 		if len(r.URL.Path) > len("/api/requests/") && r.URL.Path[len(r.URL.Path)-10:] == "/tombstone" {
 			if r.Method == http.MethodPut {
 				handler.TombstoneRequest(w, r)
 			} else if r.Method == http.MethodDelete {
 				handler.UntombstoneRequest(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
+		// Handle /api/requests/{id}/tags
+		if len(r.URL.Path) > len("/api/requests/") && r.URL.Path[len(r.URL.Path)-5:] == "/tags" {
+			if r.Method == http.MethodPut {
+				handler.UpdateRequestTags(w, r)
 			} else {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}
@@ -111,6 +131,16 @@ func main() {
 	mux.HandleFunc("/api/requests", handler.ListRequests)
 	mux.HandleFunc("/api/documents/", handler.GetDocumentImages) // Handles /api/documents/{scraper_uuid}/images
 	mux.HandleFunc("/api/images/", func(w http.ResponseWriter, r *http.Request) {
+		// Handle /api/images/{id}/tags
+		if len(r.URL.Path) > len("/api/images/") && r.URL.Path[len(r.URL.Path)-5:] == "/tags" {
+			if r.Method == http.MethodPut {
+				handler.UpdateImageTags(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
 		// Handle /api/images/{id}/tombstone
 		if len(r.URL.Path) > len("/api/images/") && r.URL.Path[len(r.URL.Path)-10:] == "/tombstone" {
 			if r.Method == http.MethodPut {

@@ -89,6 +89,17 @@ var migrations = []Migration{
 			CREATE UNIQUE INDEX IF NOT EXISTS idx_requests_slug ON requests(slug) WHERE slug IS NOT NULL;
 		`,
 	},
+	{
+		Version: 5,
+		Name:    "add_seo_enabled",
+		SQL: `
+			-- Add seo_enabled column to requests table to allow toggling SEO pages per document
+			ALTER TABLE requests ADD COLUMN seo_enabled INTEGER NOT NULL DEFAULT 1;
+
+			-- Create index on seo_enabled for filtering
+			CREATE INDEX IF NOT EXISTS idx_requests_seo_enabled ON requests(seo_enabled);
+		`,
+	},
 }
 
 // RunMigrations executes all pending migrations

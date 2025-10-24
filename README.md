@@ -173,7 +173,7 @@ The controller acts as an orchestrator for the scraper and textanalyzer services
 3. Background goroutine processes request asynchronously
 4. Client polls for status updates with progress percentage
 5. On completion, result is stored and linked to scrape request
-6. Requests auto-expire after 15 minutes
+6. Requests auto-expire after 24 hours
 
 ## Output Format
 
