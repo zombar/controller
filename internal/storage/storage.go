@@ -29,7 +29,8 @@ type Request struct {
 	TextAnalyzerUUID string                 `json:"textanalyzer_uuid"`
 	Tags             []string               `json:"tags"`
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
-	Slug             *string                `json:"slug,omitempty"` // SEO-friendly URL slug
+	Slug             *string                `json:"slug,omitempty"`     // SEO-friendly URL slug
+	SEOEnabled       bool                   `json:"seo_enabled"`        // Whether the SEO page is enabled for this document
 }
 
 // extractEffectiveDate extracts the effective date from metadata following a precedence order.
@@ -162,12 +163,12 @@ func (s *Storage) SaveRequest(req *Request) error {
 	}
 	defer tx.Rollback()
 
-	// Insert request record with effective_date and slug
+	// Insert request record with effective_date, slug, and seo_enabled
 	// Format effective_date as RFC3339 string for consistent SQLite storage
 	_, err = tx.Exec(`
-		INSERT INTO requests (id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, req.ID, req.CreatedAt, req.EffectiveDate.Format(time.RFC3339), req.SourceType, req.SourceURL, req.ScraperUUID, req.TextAnalyzerUUID, string(tagsJSON), string(metadataJSON), req.Slug)
+		INSERT INTO requests (id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, req.ID, req.CreatedAt, req.EffectiveDate.Format(time.RFC3339), req.SourceType, req.SourceURL, req.ScraperUUID, req.TextAnalyzerUUID, string(tagsJSON), string(metadataJSON), req.Slug, req.SEOEnabled)
 	if err != nil {
 		return fmt.Errorf("failed to insert request: %w", err)
 	}
@@ -200,10 +201,10 @@ func (s *Storage) GetRequest(id string) (*Request, error) {
 	var tagsJSON, metadataJSON, effectiveDateStr, slug sql.NullString
 
 	err := s.db.QueryRow(`
-		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug
+		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
 		FROM requests
 		WHERE id = ?
-	`, id).Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON, &slug)
+	`, id).Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON, &slug, &req.SEOEnabled)
 
 	// Parse effective_date from string
 	if effectiveDateStr.Valid && effectiveDateStr.String != "" {
@@ -493,7 +494,7 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 // ListRequests returns all requests ordered by creation time
 func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 	query := `
-		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug
+		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
 		FROM requests
 		ORDER BY effective_date DESC
 		LIMIT ? OFFSET ?
@@ -510,7 +511,7 @@ func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 		var req Request
 		var tagsJSON, metadataJSON, effectiveDateStr sql.NullString
 
-		err := rows.Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON, &req.Slug)
+		err := rows.Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON, &req.Slug, &req.SEOEnabled)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan request: %w", err)
 		}
@@ -712,6 +713,22 @@ func (s *Storage) GenerateMockData() error {
 			metadata["tombstone_datetime"] = tombstoneTime.Format(time.RFC3339)
 		}
 
+		// Generate slug for URL-based requests
+		var slug *string
+		if isURL {
+			// Use title as slug base
+			slugBase := sampleTitles[idx]
+			// Simple slug generation (lowercase, replace spaces with hyphens, remove special chars)
+			generatedSlug := strings.ToLower(slugBase)
+			generatedSlug = strings.ReplaceAll(generatedSlug, " ", "-")
+			// Add random suffix to ensure uniqueness
+			generatedSlug = fmt.Sprintf("%s-%d", generatedSlug, rand.Intn(10000))
+			slug = &generatedSlug
+		}
+
+		// SEO enabled by default (90% of documents)
+		seoEnabled := rand.Float64() < 0.9
+
 		// Create request
 		req := &Request{
 			ID:               uuid.New().String(),
@@ -722,6 +739,8 @@ func (s *Storage) GenerateMockData() error {
 			TextAnalyzerUUID: uuid.New().String(),
 			Tags:             sampleTags[idx],
 			Metadata:         metadata,
+			Slug:             slug,
+			SEOEnabled:       seoEnabled,
 		}
 
 		if err := s.SaveRequest(req); err != nil {
@@ -733,10 +752,33 @@ func (s *Storage) GenerateMockData() error {
 	return nil
 }
 
+// UpdateSEOEnabled updates the SEO enabled status of a request
+func (s *Storage) UpdateSEOEnabled(id string, enabled bool) error {
+	result, err := s.db.Exec(`
+		UPDATE requests
+		SET seo_enabled = ?
+		WHERE id = ?
+	`, enabled, id)
+	if err != nil {
+		return fmt.Errorf("failed to update SEO enabled status: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("request not found")
+	}
+
+	return nil
+}
+
 // GetRequestBySlug retrieves a request by its slug
 func (s *Storage) GetRequestBySlug(slug string) (*Request, error) {
 	query := `
-		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug
+		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
 		FROM requests
 		WHERE slug = ?
 		LIMIT 1
@@ -745,7 +787,7 @@ func (s *Storage) GetRequestBySlug(slug string) (*Request, error) {
 	var req Request
 	var tagsJSON, metadataJSON, effectiveDateStr sql.NullString
 
-	err := s.db.QueryRow(query, slug).Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON, &req.Slug)
+	err := s.db.QueryRow(query, slug).Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON, &req.Slug, &req.SEOEnabled)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -773,4 +815,42 @@ func (s *Storage) GetRequestBySlug(slug string) (*Request, error) {
 	}
 
 	return &req, nil
+}
+
+// UpdateRequestTags updates the tags for a specific request
+func (s *Storage) UpdateRequestTags(id string, tags []string) error {
+	// Marshal tags to JSON
+	tagsJSON, err := json.Marshal(tags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags: %w", err)
+	}
+
+	// Update tags in database
+	result, err := s.db.Exec("UPDATE requests SET tags_json = ? WHERE id = ?", string(tagsJSON), id)
+	if err != nil {
+		return fmt.Errorf("failed to update tags: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rows == 0 {
+		return fmt.Errorf("request not found")
+	}
+
+	// Delete existing tag associations
+	if _, err := s.db.Exec("DELETE FROM tags WHERE request_id = ?", id); err != nil {
+		return fmt.Errorf("failed to delete old tag associations: %w", err)
+	}
+
+	// Insert new tag associations
+	for _, tag := range tags {
+		if _, err := s.db.Exec("INSERT INTO tags (request_id, tag) VALUES (?, ?)", id, tag); err != nil {
+			return fmt.Errorf("failed to insert tag association: %w", err)
+		}
+	}
+
+	return nil
 }

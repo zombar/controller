@@ -35,6 +35,7 @@ func TestSaveAndGetRequest(t *testing.T) {
 	// Test saving a URL-based request
 	sourceURL := "https://example.com"
 	scraperUUID := "scraper-123"
+	slug := "example-article"
 	req := &Request{
 		ID:               "test-id-1",
 		CreatedAt:        time.Now().UTC(),
@@ -43,6 +44,8 @@ func TestSaveAndGetRequest(t *testing.T) {
 		ScraperUUID:      &scraperUUID,
 		TextAnalyzerUUID: "analyzer-123",
 		Tags:             []string{"tag1", "tag2", "tag3"},
+		Slug:             &slug,
+		SEOEnabled:       true,
 		Metadata: map[string]interface{}{
 			"key1": "value1",
 			"key2": 42,
@@ -72,6 +75,12 @@ func TestSaveAndGetRequest(t *testing.T) {
 	if len(retrieved.Tags) != len(req.Tags) {
 		t.Errorf("Expected %d tags, got %d", len(req.Tags), len(retrieved.Tags))
 	}
+	if retrieved.SEOEnabled != req.SEOEnabled {
+		t.Errorf("Expected SEOEnabled %v, got %v", req.SEOEnabled, retrieved.SEOEnabled)
+	}
+	if retrieved.Slug == nil || *retrieved.Slug != *req.Slug {
+		t.Errorf("Expected Slug %s, got %v", *req.Slug, retrieved.Slug)
+	}
 }
 
 func TestSaveTextRequest(t *testing.T) {
@@ -91,6 +100,7 @@ func TestSaveTextRequest(t *testing.T) {
 		SourceType:       "text",
 		TextAnalyzerUUID: "analyzer-456",
 		Tags:             []string{"text-tag1", "text-tag2"},
+		SEOEnabled:       false, // SEO typically disabled for text-based requests
 	}
 
 	if err := store.SaveRequest(req); err != nil {
@@ -763,4 +773,208 @@ func TestGetTimelineExtents(t *testing.T) {
 			t.Errorf("Expected earliest date %v (from req2 additional_metadata.date), got %v", expectedDate, earliestDate)
 		}
 	})
+}
+
+func TestUpdateSEOEnabled(t *testing.T) {
+	dbPath := "test_update_seo.db"
+	defer os.Remove(dbPath)
+
+	store, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	// Create a request with SEO disabled
+	sourceURL := "https://example.com/test"
+	scraperUUID := "scraper-seo-test"
+	slug := "test-seo-article"
+	req := &Request{
+		ID:               "test-seo-1",
+		CreatedAt:        time.Now().UTC(),
+		SourceType:       "url",
+		SourceURL:        &sourceURL,
+		ScraperUUID:      &scraperUUID,
+		TextAnalyzerUUID: "analyzer-seo-1",
+		Tags:             []string{"test"},
+		Slug:             &slug,
+		SEOEnabled:       false,
+	}
+
+	if err := store.SaveRequest(req); err != nil {
+		t.Fatalf("Failed to save request: %v", err)
+	}
+
+	// Verify SEO is disabled
+	retrieved, err := store.GetRequest("test-seo-1")
+	if err != nil {
+		t.Fatalf("Failed to get request: %v", err)
+	}
+	if retrieved.SEOEnabled {
+		t.Error("Expected SEOEnabled to be false")
+	}
+
+	// Enable SEO
+	if err := store.UpdateSEOEnabled("test-seo-1", true); err != nil {
+		t.Fatalf("Failed to update SEO enabled: %v", err)
+	}
+
+	// Verify SEO is now enabled
+	retrieved, err = store.GetRequest("test-seo-1")
+	if err != nil {
+		t.Fatalf("Failed to get request after update: %v", err)
+	}
+	if !retrieved.SEOEnabled {
+		t.Error("Expected SEOEnabled to be true after update")
+	}
+
+	// Disable SEO again
+	if err := store.UpdateSEOEnabled("test-seo-1", false); err != nil {
+		t.Fatalf("Failed to disable SEO: %v", err)
+	}
+
+	// Verify SEO is disabled
+	retrieved, err = store.GetRequest("test-seo-1")
+	if err != nil {
+		t.Fatalf("Failed to get request after second update: %v", err)
+	}
+	if retrieved.SEOEnabled {
+		t.Error("Expected SEOEnabled to be false after disabling")
+	}
+}
+
+func TestUpdateSEOEnabledNotFound(t *testing.T) {
+	dbPath := "test_update_seo_notfound.db"
+	defer os.Remove(dbPath)
+
+	store, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	err = store.UpdateSEOEnabled("non-existent-id", true)
+	if err == nil {
+		t.Error("Expected error for non-existent request")
+	}
+	if err.Error() != "request not found" {
+		t.Errorf("Expected 'request not found' error, got: %v", err)
+	}
+}
+
+func TestGetRequestBySlug(t *testing.T) {
+	dbPath := "test_get_by_slug.db"
+	defer os.Remove(dbPath)
+
+	store, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	// Create a request with a slug
+	sourceURL := "https://example.com/article"
+	scraperUUID := "scraper-slug-test"
+	slug := "my-awesome-article"
+	req := &Request{
+		ID:               "test-slug-1",
+		CreatedAt:        time.Now().UTC(),
+		SourceType:       "url",
+		SourceURL:        &sourceURL,
+		ScraperUUID:      &scraperUUID,
+		TextAnalyzerUUID: "analyzer-slug-1",
+		Tags:             []string{"test", "slug"},
+		Slug:             &slug,
+		SEOEnabled:       true,
+		Metadata: map[string]interface{}{
+			"scraper_metadata": map[string]interface{}{
+				"title": "My Awesome Article",
+			},
+		},
+	}
+
+	if err := store.SaveRequest(req); err != nil {
+		t.Fatalf("Failed to save request: %v", err)
+	}
+
+	// Retrieve by slug
+	retrieved, err := store.GetRequestBySlug("my-awesome-article")
+	if err != nil {
+		t.Fatalf("Failed to get request by slug: %v", err)
+	}
+
+	if retrieved == nil {
+		t.Fatal("Expected request, got nil")
+	}
+
+	if retrieved.ID != req.ID {
+		t.Errorf("Expected ID %s, got %s", req.ID, retrieved.ID)
+	}
+	if retrieved.Slug == nil || *retrieved.Slug != slug {
+		t.Errorf("Expected slug %s, got %v", slug, retrieved.Slug)
+	}
+	if !retrieved.SEOEnabled {
+		t.Error("Expected SEOEnabled to be true")
+	}
+
+	// Try to retrieve non-existent slug
+	nonExistent, err := store.GetRequestBySlug("non-existent-slug")
+	if err != nil {
+		t.Fatalf("Expected no error for non-existent slug, got: %v", err)
+	}
+	if nonExistent != nil {
+		t.Error("Expected nil for non-existent slug")
+	}
+}
+
+func TestSlugUniqueness(t *testing.T) {
+	dbPath := "test_slug_uniqueness.db"
+	defer os.Remove(dbPath)
+
+	store, err := New(dbPath)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	// Create first request with a slug
+	sourceURL1 := "https://example.com/article-1"
+	scraperUUID1 := "scraper-1"
+	slug := "duplicate-slug"
+	req1 := &Request{
+		ID:               "test-dup-1",
+		CreatedAt:        time.Now().UTC(),
+		SourceType:       "url",
+		SourceURL:        &sourceURL1,
+		ScraperUUID:      &scraperUUID1,
+		TextAnalyzerUUID: "analyzer-1",
+		Tags:             []string{"test"},
+		Slug:             &slug,
+		SEOEnabled:       true,
+	}
+
+	if err := store.SaveRequest(req1); err != nil {
+		t.Fatalf("Failed to save first request: %v", err)
+	}
+
+	// Try to create second request with same slug
+	sourceURL2 := "https://example.com/article-2"
+	scraperUUID2 := "scraper-2"
+	req2 := &Request{
+		ID:               "test-dup-2",
+		CreatedAt:        time.Now().UTC(),
+		SourceType:       "url",
+		SourceURL:        &sourceURL2,
+		ScraperUUID:      &scraperUUID2,
+		TextAnalyzerUUID: "analyzer-2",
+		Tags:             []string{"test"},
+		Slug:             &slug, // Same slug
+		SEOEnabled:       true,
+	}
+
+	// This should fail due to unique constraint on slug
+	err = store.SaveRequest(req2)
+	if err == nil {
+		t.Error("Expected error when saving duplicate slug, but got none")
+	}
 }
