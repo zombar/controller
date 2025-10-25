@@ -7,12 +7,17 @@ RUN apk add --no-cache git ca-certificates tzdata
 # Set working directory
 WORKDIR /build
 
-# Copy go mod files first for better caching
-COPY go.mod go.sum ./
+# Copy shared packages
+COPY pkg/tracing ./pkg/tracing
+COPY pkg/metrics ./pkg/metrics
+
+# Copy service go mod files first for better caching
+COPY apps/controller/go.mod apps/controller/go.sum ./apps/controller/
+WORKDIR /build/apps/controller
 RUN go mod download
 
-# Copy source code
-COPY . .
+# Copy service source code
+COPY apps/controller ./
 
 # Build the binary (pure Go with modernc.org/sqlite)
 RUN GOOS=linux go build -a -ldflags="-w -s" -o controller ./cmd/controller
@@ -34,7 +39,7 @@ RUN mkdir -p /app/data && \
 WORKDIR /app
 
 # Copy binary from builder
-COPY --from=builder /build/controller .
+COPY --from=builder /build/apps/controller/controller .
 
 # Copy timezone data
 COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
