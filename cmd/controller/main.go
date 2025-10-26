@@ -238,19 +238,19 @@ func main() {
 
 	// Setup server with tracing and CORS middleware
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	var handler http.Handler = mux
+	var httpHandler http.Handler = mux
 
 	// Wrap with tracing middleware if initialized
 	if tp != nil {
-		handler = tracing.HTTPMiddleware(handler)
+		httpHandler = tracing.HTTPMiddleware("docutab-controller")(httpHandler)
 	}
 
 	// Apply CORS middleware
-	handler = corsMiddleware(handler)
+	httpHandler = corsMiddleware(httpHandler)
 
 	server := &http.Server{
 		Addr:    addr,
-		Handler: handler,
+		Handler: httpHandler,
 	}
 
 	// Setup graceful shutdown

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -110,7 +111,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Score the link first to determine if it should be fully processed
-	scoreResp, err := h.scraper.ScoreLink(req.URL)
+	scoreResp, err := h.scraper.ScoreLink(r.Context(), req.URL)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to score URL: %v", err), http.StatusInternalServerError)
 		return
@@ -182,7 +183,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Score meets or exceeds threshold - proceed with full scraping
-	scraperResp, err := h.scraper.Scrape(req.URL)
+	scraperResp, err := h.scraper.Scrape(r.Context(), req.URL)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to scrape URL: %v", err), http.StatusInternalServerError)
 		return
@@ -205,7 +206,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 	// Analyze the content (skip for image URLs)
 	var analyzerResp *clients.TextAnalyzerResponse
 	if !isImageURL {
-		analyzerResp, err = h.textAnalyzer.Analyze(scraperResp.Content)
+		analyzerResp, err = h.textAnalyzer.Analyze(r.Context(), scraperResp.Content)
 		if err != nil {
 			respondError(w, fmt.Sprintf("Failed to analyze text: %v", err), http.StatusInternalServerError)
 			return
@@ -318,7 +319,7 @@ func (h *Handler) AnalyzeText(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call text analyzer service
-	analyzerResp, err := h.textAnalyzer.Analyze(req.Text)
+	analyzerResp, err := h.textAnalyzer.Analyze(r.Context(), req.Text)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to analyze text: %v", err), http.StatusInternalServerError)
 		return
@@ -655,13 +656,13 @@ func (h *Handler) DeleteRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Delete from upstream services first
 	if record.ScraperUUID != nil && *record.ScraperUUID != "" {
-		if err := h.scraper.DeleteScrape(*record.ScraperUUID); err != nil {
+		if err := h.scraper.DeleteScrape(r.Context(), *record.ScraperUUID); err != nil {
 			log.Printf("Warning: Failed to delete scrape %s: %v", *record.ScraperUUID, err)
 		}
 	}
 
 	if record.TextAnalyzerUUID != "" {
-		if err := h.textAnalyzer.DeleteAnalysis(record.TextAnalyzerUUID); err != nil {
+		if err := h.textAnalyzer.DeleteAnalysis(r.Context(), record.TextAnalyzerUUID); err != nil {
 			log.Printf("Warning: Failed to delete analysis %s: %v", record.TextAnalyzerUUID, err)
 		}
 	}
@@ -690,7 +691,7 @@ func (h *Handler) DeleteImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Delete from scraper service
-	if err := h.scraper.DeleteImage(imageID); err != nil {
+	if err := h.scraper.DeleteImage(r.Context(), imageID); err != nil {
 		respondError(w, fmt.Sprintf("Failed to delete image: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -799,7 +800,7 @@ func (h *Handler) TombstoneImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Tombstone via scraper service
-	if err := h.scraper.TombstoneImage(imageID); err != nil {
+	if err := h.scraper.TombstoneImage(r.Context(), imageID); err != nil {
 		respondError(w, fmt.Sprintf("Failed to tombstone image: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -824,7 +825,7 @@ func (h *Handler) UntombstoneImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Untombstone via scraper service
-	if err := h.scraper.UntombstoneImage(imageID); err != nil {
+	if err := h.scraper.UntombstoneImage(r.Context(), imageID); err != nil {
 		respondError(w, fmt.Sprintf("Failed to untombstone image: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -904,7 +905,7 @@ func (h *Handler) UpdateImageTags(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update tags via scraper service
-	if err := h.scraper.UpdateImageTags(id, req.Tags); err != nil {
+	if err := h.scraper.UpdateImageTags(r.Context(), id, req.Tags); err != nil {
 		if strings.Contains(err.Error(), "image not found") {
 			respondError(w, "Image not found", http.StatusNotFound)
 			return
@@ -995,7 +996,7 @@ func (h *Handler) SearchImageTags(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call scraper service to search images by tags (fuzzy matching)
-	searchResp, err := h.scraper.SearchImagesByTags(req.Tags)
+	searchResp, err := h.scraper.SearchImagesByTags(r.Context(), req.Tags)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to search images: %v", err), http.StatusInternalServerError)
 		return
@@ -1028,7 +1029,7 @@ func (h *Handler) GetDocumentImages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call scraper service to get images by scrape ID
-	searchResp, err := h.scraper.GetImagesByScrapeID(scrapeID)
+	searchResp, err := h.scraper.GetImagesByScrapeID(r.Context(), scrapeID)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to retrieve images: %v", err), http.StatusInternalServerError)
 		return
@@ -1057,7 +1058,7 @@ func (h *Handler) GetImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call scraper service to get image by ID
-	image, err := h.scraper.GetImageByID(imageID)
+	image, err := h.scraper.GetImageByID(r.Context(), imageID)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to retrieve image: %v", err), http.StatusInternalServerError)
 		return
@@ -1090,7 +1091,7 @@ func (h *Handler) ScoreLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call scraper service to score the link
-	scoreResp, err := h.scraper.ScoreLink(req.URL)
+	scoreResp, err := h.scraper.ScoreLink(r.Context(), req.URL)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to score link: %v", err), http.StatusInternalServerError)
 		return
@@ -1136,7 +1137,7 @@ func (h *Handler) ExtractLinks(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call scraper service to extract links
-	extractResp, err := h.scraper.ExtractLinks(req.URL)
+	extractResp, err := h.scraper.ExtractLinks(r.Context(), req.URL)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to extract links: %v", err), http.StatusInternalServerError)
 		return
@@ -1311,7 +1312,7 @@ func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
 
 	// Score the URL first
 	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 30)
-	scoreResp, err := h.scraper.ScoreLink(url)
+	scoreResp, err := h.scraper.ScoreLink(context.Background(), url)
 	if err != nil {
 		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to score link: %v", err))
 		return
@@ -1371,7 +1372,7 @@ func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
 
 	// Scrape the URL
 	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 50)
-	scrapeResp, err := h.scraper.Scrape(url)
+	scrapeResp, err := h.scraper.Scrape(context.Background(), url)
 	if err != nil {
 		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to scrape: %v", err))
 		return
@@ -1396,7 +1397,7 @@ func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
 	var analyzeResp *clients.TextAnalyzerResponse
 	if !isImageURL {
 		h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 80)
-		analyzeResp, err = h.textAnalyzer.Analyze(scrapeResp.Content)
+		analyzeResp, err = h.textAnalyzer.Analyze(context.Background(), scrapeResp.Content)
 		if err != nil {
 			h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to analyze: %v", err))
 			return
@@ -1484,7 +1485,7 @@ func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
 	// Extract links if requested (skip for image URLs)
 	if extractLinks && !isImageURL {
 		log.Printf("Extracting links from %s", url)
-		extractResp, err := h.scraper.ExtractLinks(url)
+		extractResp, err := h.scraper.ExtractLinks(context.Background(), url)
 		if err != nil {
 			log.Printf("Failed to extract links from %s: %v", url, err)
 			return
@@ -1524,7 +1525,7 @@ func (h *Handler) processTextAnalysisRequest(id, text string) {
 	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 30)
 
 	// Analyze the text
-	analyzeResp, err := h.textAnalyzer.Analyze(text)
+	analyzeResp, err := h.textAnalyzer.Analyze(context.Background(), text)
 	if err != nil {
 		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to analyze: %v", err))
 		return
@@ -1589,7 +1590,7 @@ func (h *Handler) ListSchedulerTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tasks, err := h.scheduler.ListTasks()
+	tasks, err := h.scheduler.ListTasks(r.Context())
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to list tasks: %v", err), http.StatusInternalServerError)
 		return
@@ -1613,7 +1614,7 @@ func (h *Handler) GetSchedulerTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := h.scheduler.GetTask(id)
+	task, err := h.scheduler.GetTask(r.Context(), id)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to get task: %v", err), http.StatusInternalServerError)
 		return
@@ -1635,7 +1636,7 @@ func (h *Handler) CreateSchedulerTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	createdTask, err := h.scheduler.CreateTask(&task)
+	createdTask, err := h.scheduler.CreateTask(r.Context(), &task)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to create task: %v", err), http.StatusInternalServerError)
 		return
@@ -1665,7 +1666,7 @@ func (h *Handler) UpdateSchedulerTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	updatedTask, err := h.scheduler.UpdateTask(id, &task)
+	updatedTask, err := h.scheduler.UpdateTask(r.Context(), id, &task)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to update task: %v", err), http.StatusInternalServerError)
 		return
@@ -1689,7 +1690,7 @@ func (h *Handler) DeleteSchedulerTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.scheduler.DeleteTask(id); err != nil {
+	if err := h.scheduler.DeleteTask(r.Context(), id); err != nil {
 		respondError(w, fmt.Sprintf("Failed to delete task: %v", err), http.StatusInternalServerError)
 		return
 	}

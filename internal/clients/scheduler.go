@@ -2,11 +2,16 @@ package clients
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
+
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 // SchedulerClient handles communication with the scheduler service
@@ -41,142 +46,270 @@ func NewSchedulerClient(baseURL string) *SchedulerClient {
 }
 
 // ListTasks retrieves all tasks from the scheduler
-func (c *SchedulerClient) ListTasks() ([]*Task, error) {
-	resp, err := c.httpClient.Get(fmt.Sprintf("%s/api/tasks", c.baseURL))
+func (c *SchedulerClient) ListTasks(ctx context.Context) ([]*Task, error) {
+	tracer := otel.Tracer("controller")
+	ctx, span := tracer.Start(ctx, "scheduler.ListTasks")
+	defer span.End()
+
+	span.SetAttributes(attribute.String("http.method", "GET"))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/api/tasks", c.baseURL),
+		nil)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to create request")
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to send request")
 		return nil, fmt.Errorf("failed to send request to scheduler: %w", err)
 	}
 	defer resp.Body.Close()
 
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to read response")
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		span.SetStatus(codes.Error, fmt.Sprintf("status %d", resp.StatusCode))
 		return nil, fmt.Errorf("scheduler service returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var tasks []*Task
 	if err := json.Unmarshal(body, &tasks); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to unmarshal response")
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
+	span.SetAttributes(attribute.Int("scheduler.task_count", len(tasks)))
+	span.SetStatus(codes.Ok, "success")
 	return tasks, nil
 }
 
 // GetTask retrieves a specific task by ID
-func (c *SchedulerClient) GetTask(id int64) (*Task, error) {
-	resp, err := c.httpClient.Get(fmt.Sprintf("%s/api/tasks/%d", c.baseURL, id))
+func (c *SchedulerClient) GetTask(ctx context.Context, id int64) (*Task, error) {
+	tracer := otel.Tracer("controller")
+	ctx, span := tracer.Start(ctx, "scheduler.GetTask")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.Int64("scheduler.task_id", id),
+		attribute.String("http.method", "GET"),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/api/tasks/%d", c.baseURL, id),
+		nil)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to create request")
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to send request")
 		return nil, fmt.Errorf("failed to send request to scheduler: %w", err)
 	}
 	defer resp.Body.Close()
 
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to read response")
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		span.SetStatus(codes.Error, fmt.Sprintf("status %d", resp.StatusCode))
 		return nil, fmt.Errorf("scheduler service returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var task Task
 	if err := json.Unmarshal(body, &task); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to unmarshal response")
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
+	span.SetStatus(codes.Ok, "success")
 	return &task, nil
 }
 
 // CreateTask creates a new task in the scheduler
-func (c *SchedulerClient) CreateTask(task *Task) (*Task, error) {
-	jsonData, err := json.Marshal(task)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
-	}
+func (c *SchedulerClient) CreateTask(ctx context.Context, task *Task) (*Task, error) {
+	tracer := otel.Tracer("controller")
+	ctx, span := tracer.Start(ctx, "scheduler.CreateTask")
+	defer span.End()
 
-	resp, err := c.httpClient.Post(
-		fmt.Sprintf("%s/api/tasks", c.baseURL),
-		"application/json",
-		bytes.NewBuffer(jsonData),
+	span.SetAttributes(
+		attribute.String("scheduler.task_name", task.Name),
+		attribute.String("scheduler.task_type", task.Type),
+		attribute.String("http.method", "POST"),
 	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to send request to scheduler: %w", err)
-	}
-	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("scheduler service returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var createdTask Task
-	if err := json.Unmarshal(body, &createdTask); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return &createdTask, nil
-}
-
-// UpdateTask updates an existing task
-func (c *SchedulerClient) UpdateTask(id int64, task *Task) (*Task, error) {
 	jsonData, err := json.Marshal(task)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to marshal request")
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPut, fmt.Sprintf("%s/api/tasks/%d", c.baseURL, id), bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		fmt.Sprintf("%s/api/tasks", c.baseURL),
+		bytes.NewBuffer(jsonData))
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to create request")
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to send request")
 		return nil, fmt.Errorf("failed to send request to scheduler: %w", err)
 	}
 	defer resp.Body.Close()
 
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to read response")
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusCreated {
+		span.SetStatus(codes.Error, fmt.Sprintf("status %d", resp.StatusCode))
+		return nil, fmt.Errorf("scheduler service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var createdTask Task
+	if err := json.Unmarshal(body, &createdTask); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to unmarshal response")
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	span.SetStatus(codes.Ok, "success")
+	return &createdTask, nil
+}
+
+// UpdateTask updates an existing task
+func (c *SchedulerClient) UpdateTask(ctx context.Context, id int64, task *Task) (*Task, error) {
+	tracer := otel.Tracer("controller")
+	ctx, span := tracer.Start(ctx, "scheduler.UpdateTask")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.Int64("scheduler.task_id", id),
+		attribute.String("scheduler.task_name", task.Name),
+		attribute.String("scheduler.task_type", task.Type),
+		attribute.String("http.method", "PUT"),
+	)
+
+	jsonData, err := json.Marshal(task)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to marshal request")
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		fmt.Sprintf("%s/api/tasks/%d", c.baseURL, id),
+		bytes.NewBuffer(jsonData))
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to create request")
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to send request")
+		return nil, fmt.Errorf("failed to send request to scheduler: %w", err)
+	}
+	defer resp.Body.Close()
+
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to read response")
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		span.SetStatus(codes.Error, fmt.Sprintf("status %d", resp.StatusCode))
 		return nil, fmt.Errorf("scheduler service returned status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var updatedTask Task
 	if err := json.Unmarshal(body, &updatedTask); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to unmarshal response")
 		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
+	span.SetStatus(codes.Ok, "success")
 	return &updatedTask, nil
 }
 
 // DeleteTask deletes a task from the scheduler
-func (c *SchedulerClient) DeleteTask(id int64) error {
-	req, err := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/tasks/%d", c.baseURL, id), nil)
+func (c *SchedulerClient) DeleteTask(ctx context.Context, id int64) error {
+	tracer := otel.Tracer("controller")
+	ctx, span := tracer.Start(ctx, "scheduler.DeleteTask")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.Int64("scheduler.task_id", id),
+		attribute.String("http.method", "DELETE"),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete,
+		fmt.Sprintf("%s/api/tasks/%d", c.baseURL, id),
+		nil)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to create request")
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to send request")
 		return fmt.Errorf("failed to send request to scheduler: %w", err)
 	}
 	defer resp.Body.Close()
 
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		span.SetStatus(codes.Error, fmt.Sprintf("status %d", resp.StatusCode))
 		return fmt.Errorf("scheduler service returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	span.SetStatus(codes.Ok, "success")
 	return nil
 }
