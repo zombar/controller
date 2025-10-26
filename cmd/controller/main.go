@@ -8,12 +8,16 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/zombar/controller/internal/clients"
 	"github.com/zombar/controller/internal/config"
 	"github.com/zombar/controller/internal/handlers"
+	"github.com/zombar/controller/internal/queue"
 	"github.com/zombar/controller/internal/storage"
 	"github.com/zombar/controller/pkg/logging"
+	"github.com/zombar/purpletab/pkg/metrics"
 	"github.com/zombar/purpletab/pkg/tracing"
 )
 
@@ -74,6 +78,17 @@ func main() {
 	}
 	defer store.Close()
 
+	// Initialize database metrics
+	dbMetrics := metrics.NewDatabaseMetrics("controller")
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			dbMetrics.UpdateDBStats(store.DB())
+		}
+	}()
+	logger.Info("database metrics initialized")
+
 	// Generate mock data if enabled
 	if cfg.GenerateMockData {
 		logger.Info("mock data generation enabled")
@@ -87,12 +102,44 @@ func main() {
 	textAnalyzerClient := clients.NewTextAnalyzerClient(cfg.TextAnalyzerBaseURL)
 	schedulerClient := clients.NewSchedulerClient(cfg.SchedulerBaseURL)
 
+	// Initialize queue client
+	queueClient := queue.NewClient(queue.ClientConfig{
+		RedisAddr: cfg.RedisAddr,
+	})
+	defer queueClient.Close()
+	logger.Info("queue client initialized", "redis_addr", cfg.RedisAddr)
+
+	// Initialize queue worker
+	worker := queue.NewWorker(
+		queue.WorkerConfig{
+			RedisAddr:          cfg.RedisAddr,
+			Concurrency:        cfg.WorkerConcurrency,
+			LinkScoreThreshold: cfg.LinkScoreThreshold,
+			MaxLinkDepth:       cfg.MaxLinkDepth,
+		},
+		store,
+		scraperClient,
+		textAnalyzerClient,
+		queueClient,
+	)
+	logger.Info("queue worker initialized", "concurrency", cfg.WorkerConcurrency, "max_link_depth", cfg.MaxLinkDepth)
+
+	// Start worker in background
+	go func() {
+		logger.Info("starting queue worker")
+		if err := worker.Start(); err != nil {
+			logger.Error("queue worker failed", "error", err)
+			os.Exit(1)
+		}
+	}()
+
 	// Initialize handlers
-	handler := handlers.New(store, scraperClient, textAnalyzerClient, schedulerClient, cfg.LinkScoreThreshold, cfg.WebInterfaceURL, cfg.ScraperBaseURL)
+	handler := handlers.New(store, scraperClient, textAnalyzerClient, schedulerClient, queueClient, cfg.LinkScoreThreshold, cfg.WebInterfaceURL, cfg.ScraperBaseURL)
 
 	// Setup routes
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handler.Health)
+	mux.Handle("/metrics", promhttp.Handler()) // Prometheus metrics endpoint
 	mux.HandleFunc("/api/scrape", handler.ScrapeURL)
 	mux.HandleFunc("/api/analyze", handler.AnalyzeText)
 	mux.HandleFunc("/api/score", handler.ScoreLink)
@@ -291,6 +338,10 @@ func main() {
 	// Wait for shutdown signal
 	<-shutdown
 	logger.Info("shutting down controller service")
+
+	// Shutdown worker
+	worker.Shutdown()
+	logger.Info("queue worker stopped")
 
 	// Close storage
 	if err := store.Close(); err != nil {

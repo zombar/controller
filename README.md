@@ -9,8 +9,10 @@ A central orchestration service that coordinates the scraper and textanalyzer mi
 
 - Orchestrates scraper and textanalyzer services
 - Unified API for URL scraping with automatic text analysis
-- Asynchronous scrape request processing with progress tracking
-- In-memory scrape request management with auto-expiration
+- **Persistent task queue with Asynq and Redis**
+- **Asynchronous scrape request processing with database persistence**
+- **Configurable worker concurrency and retry policies**
+- **Queue monitoring UI via Asynqmon**
 - Direct text analysis without scraping
 - AI-powered link extraction and filtering
 - Batch URL scraping with caching support
@@ -26,6 +28,7 @@ A central orchestration service that coordinates the scraper and textanalyzer mi
 - Go 1.21 or higher
 - Running scraper service
 - Running textanalyzer service
+- **Redis 6.0 or higher (for task queue)**
 - SQLite3
 
 ## Installation
@@ -64,8 +67,13 @@ export DATABASE_PATH=./controller.db
 
 - `SCRAPER_BASE_URL` - Scraper service URL (default: http://localhost:8081)
 - `TEXTANALYZER_BASE_URL` - TextAnalyzer service URL (default: http://localhost:8082)
+- `SCHEDULER_BASE_URL` - Scheduler service URL (default: http://localhost:8083)
 - `CONTROLLER_PORT` - HTTP server port (default: 8080)
 - `DATABASE_PATH` - SQLite database path (default: ./controller.db)
+- **`REDIS_ADDR` - Redis server address (default: localhost:6379)**
+- **`WORKER_CONCURRENCY` - Number of concurrent queue workers (default: 10)**
+- `LINK_SCORE_THRESHOLD` - Minimum link quality score 0.0-1.0 (default: 0.5)
+- `WEB_INTERFACE_URL` - Web interface URL for SEO links (default: http://localhost:5173)
 
 ## Quick Examples
 
@@ -134,7 +142,7 @@ curl "http://localhost:8080/requests?limit=10&offset=0"
 
 ## Architecture
 
-The controller acts as an orchestrator for the scraper and textanalyzer services:
+The controller acts as an orchestrator for the scraper and textanalyzer services, using Redis-backed queues for async processing:
 
 ```
 ┌──────────┐
@@ -142,13 +150,17 @@ The controller acts as an orchestrator for the scraper and textanalyzer services
 └────┬─────┘
      │
      v
-┌────────────┐       ┌──────────┐
-│ Controller │──────>│ Scraper  │
-│  Service   │       └──────────┘
-└────┬───────┘
-     │              ┌──────────────┐
-     └─────────────>│TextAnalyzer  │
-                    └──────────────┘
+┌────────────┐       ┌──────────┐       ┌──────────────┐
+│ Controller │──────>│ Scraper  │       │ Asynq Queue  │
+│   API      │       └──────────┘       │   (Redis)    │
+└────┬───────┘              ^            └──────┬───────┘
+     │                      │                   │
+     │              ┌──────────────┐            │
+     └─────────────>│TextAnalyzer  │            v
+                    └──────────────┘    ┌───────────────┐
+                                        │Queue Workers  │
+                                        │(Concurrent)   │
+                                        └───────────────┘
 ```
 
 ### Workflow
@@ -167,13 +179,16 @@ The controller acts as an orchestrator for the scraper and textanalyzer services
 3. Controller stores UUID and tags
 4. Controller returns analysis result
 
-**Async Scrape Request Flow:**
+**Async Scrape Request Flow (Queue-based):**
 1. Client creates scrape request
-2. Controller returns request with UUID and pending status
-3. Background goroutine processes request asynchronously
-4. Client polls for status updates with progress percentage
-5. On completion, result is stored and linked to scrape request
-6. Requests auto-expire after 24 hours
+2. Controller creates job in database and enqueues to Redis
+3. Controller returns job with UUID and "queued" status
+4. Asynq worker picks up task from queue
+5. Worker processes scrape → analyze → store workflow
+6. Job status updates: queued → processing → completed/failed
+7. Failed jobs retry with exponential backoff (1min, 5min, 15min)
+8. Client polls for status updates via job ID
+9. Completed jobs persist in database with result linkage
 
 ## Output Format
 
@@ -252,20 +267,30 @@ controller/
 ├── internal/
 │   ├── clients/
 │   │   ├── scraper.go          # Scraper service client
-│   │   └── textanalyzer.go     # TextAnalyzer client
+│   │   ├── textanalyzer.go     # TextAnalyzer client
+│   │   └── scheduler.go        # Scheduler client
 │   ├── config/
 │   │   ├── config.go           # Configuration management
 │   │   └── config_test.go      # Config tests
 │   ├── handlers/
 │   │   ├── handlers.go         # HTTP handlers
-│   │   └── handlers_test.go    # Handler tests
+│   │   ├── handlers_test.go    # Handler tests
+│   │   └── seo.go              # SEO-related handlers
+│   ├── queue/
+│   │   ├── client.go           # Asynq queue client
+│   │   ├── worker.go           # Asynq queue worker
+│   │   ├── tasks.go            # Task handlers
+│   │   └── tasks_test.go       # Task tests
 │   ├── scraper_requests/
-│   │   ├── scraper_requests.go # In-memory scrape request manager
+│   │   ├── scraper_requests.go # In-memory manager (text analysis only)
 │   │   └── scraper_requests_test.go # Manager tests
-│   └── storage/
-│       ├── migrations.go       # Database migrations
-│       ├── storage.go          # Database operations
-│       └── storage_test.go     # Storage tests
+│   ├── storage/
+│   │   ├── migrations.go       # Database migrations
+│   │   ├── storage.go          # Database operations
+│   │   ├── scrape_jobs.go      # Scrape job persistence
+│   │   └── storage_test.go     # Storage tests
+│   └── slug/
+│       └── slug.go             # URL slug generation
 ├── .env.example                # Example configuration
 ├── README.md                   # This file
 └── API.md                      # API reference
@@ -278,17 +303,33 @@ controller/
 **requests table:**
 - `id` - UUID primary key
 - `created_at` - Timestamp
+- `effective_date` - Date used for timeline (from metadata or created_at)
 - `source_type` - "url" or "text"
 - `source_url` - Original URL (nullable)
 - `scraper_uuid` - Scraper service UUID (nullable)
 - `textanalyzer_uuid` - TextAnalyzer UUID
 - `tags_json` - JSON array of tags
 - `metadata_json` - JSON metadata object
+- `slug` - SEO-friendly URL slug
+- `seo_enabled` - Boolean flag for SEO page generation
 
 **tags table:**
 - `id` - Auto-increment primary key
 - `request_id` - Foreign key to requests.id
 - `tag` - Individual tag value
+
+**scrape_jobs table (queue persistence):**
+- `id` - UUID primary key (job ID)
+- `url` - URL to scrape
+- `extract_links` - Boolean for recursive link extraction
+- `status` - Job status: queued, processing, completed, failed
+- `retries` - Retry attempt count
+- `created_at` - Job creation timestamp
+- `updated_at` - Last update timestamp
+- `completed_at` - Completion timestamp
+- `error_message` - Error details for failed jobs
+- `result_request_id` - Foreign key to requests.id (result)
+- `asynq_task_id` - Asynq task ID for correlation
 
 ### Migrations
 

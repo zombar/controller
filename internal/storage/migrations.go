@@ -100,6 +100,48 @@ var migrations = []Migration{
 			CREATE INDEX IF NOT EXISTS idx_requests_seo_enabled ON requests(seo_enabled);
 		`,
 	},
+	{
+		Version: 6,
+		Name:    "add_scrape_jobs_table",
+		SQL: `
+			-- Create table for tracking async scrape jobs (replacing in-memory manager)
+			CREATE TABLE IF NOT EXISTS scrape_jobs (
+				id TEXT PRIMARY KEY,
+				url TEXT NOT NULL,
+				extract_links INTEGER NOT NULL DEFAULT 0,
+				status TEXT NOT NULL CHECK(status IN ('queued', 'processing', 'completed', 'failed')),
+				retries INTEGER NOT NULL DEFAULT 0,
+				created_at TIMESTAMP NOT NULL,
+				updated_at TIMESTAMP NOT NULL,
+				completed_at TIMESTAMP,
+				error_message TEXT,
+				result_request_id TEXT,
+				asynq_task_id TEXT,
+				FOREIGN KEY(result_request_id) REFERENCES requests(id) ON DELETE SET NULL
+			);
+
+			-- Indexes for efficient querying
+			CREATE INDEX IF NOT EXISTS idx_scrape_jobs_status ON scrape_jobs(status);
+			CREATE INDEX IF NOT EXISTS idx_scrape_jobs_created_at ON scrape_jobs(created_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_scrape_jobs_url ON scrape_jobs(url);
+			CREATE INDEX IF NOT EXISTS idx_scrape_jobs_asynq_task_id ON scrape_jobs(asynq_task_id);
+		`,
+	},
+	{
+		Version: 7,
+		Name:    "add_parent_job_and_depth",
+		SQL: `
+			-- Add parent_job_id and depth for hierarchical scrape jobs
+			ALTER TABLE scrape_jobs ADD COLUMN parent_job_id TEXT;
+			ALTER TABLE scrape_jobs ADD COLUMN depth INTEGER NOT NULL DEFAULT 0;
+
+			-- Create index for parent lookup
+			CREATE INDEX IF NOT EXISTS idx_scrape_jobs_parent_job_id ON scrape_jobs(parent_job_id);
+
+			-- Add foreign key constraint
+			CREATE INDEX IF NOT EXISTS idx_scrape_jobs_parent_fk ON scrape_jobs(parent_job_id);
+		`,
+	},
 }
 
 // RunMigrations executes all pending migrations

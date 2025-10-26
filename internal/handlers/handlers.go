@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/zombar/controller/internal/clients"
+	"github.com/zombar/controller/internal/queue"
 	"github.com/zombar/controller/internal/scraper_requests"
 	internalslug "github.com/zombar/controller/internal/slug"
 	"github.com/zombar/controller/internal/storage"
@@ -25,20 +26,22 @@ type Handler struct {
 	textAnalyzer       *clients.TextAnalyzerClient
 	scheduler          *clients.SchedulerClient
 	linkScoreThreshold float64
-	scrapeRequests     *scraper_requests.Manager
+	scrapeRequests     *scraper_requests.Manager // TODO: Remove after text analysis queue is implemented
+	queueClient        *queue.Client
 	webInterfaceURL    string
 	scraperBaseURL     string
 }
 
 // New creates a new Handler
-func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, linkScoreThreshold float64, webInterfaceURL string, scraperBaseURL string) *Handler {
+func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, queueClient *queue.Client, linkScoreThreshold float64, webInterfaceURL string, scraperBaseURL string) *Handler {
 	return &Handler{
 		storage:            store,
 		scraper:            scraper,
 		textAnalyzer:       textAnalyzer,
 		scheduler:          scheduler,
 		linkScoreThreshold: linkScoreThreshold,
-		scrapeRequests:     scraper_requests.NewManager(),
+		scrapeRequests:     scraper_requests.NewManager(), // TODO: Remove after text analysis queue is implemented
+		queueClient:        queueClient,
 		webInterfaceURL:    webInterfaceURL,
 		scraperBaseURL:     scraperBaseURL,
 	}
@@ -139,6 +142,9 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		if domain := extractDomainTag(req.URL); domain != "" {
 			tags = append(tags, domain)
 		}
+
+		// Add 'scrape' tag to all scraped content
+		tags = append(tags, "scrape")
 
 		record := &storage.Request{
 			ID:         controllerID,
@@ -257,6 +263,9 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 	if domain := extractDomainTag(req.URL); domain != "" {
 		tags = append(tags, domain)
 	}
+
+	// Add 'scrape' tag to all scraped content
+	tags = append(tags, "scrape")
 
 	// Extract slug from scraper response if available
 	var slug *string
@@ -1170,15 +1179,39 @@ func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create or get existing scrape request
-	scrapeReq, isNew := h.scrapeRequests.Create(req.URL, req.ExtractLinks)
-
-	// If new, start background scraping
-	if isNew {
-		go h.processScrapeRequest(scrapeReq.ID, req.URL, req.ExtractLinks)
+	// Create scrape job in database
+	jobID := uuid.New().String()
+	job := &storage.ScrapeJob{
+		ID:           jobID,
+		URL:          req.URL,
+		ExtractLinks: req.ExtractLinks,
+		Status:       "queued",
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
 	}
 
-	respondJSON(w, scrapeReq, http.StatusOK)
+	if err := h.storage.SaveScrapeJob(job); err != nil {
+		respondError(w, fmt.Sprintf("Failed to create scrape job: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Enqueue task to Asynq (skip if queueClient is nil for testing)
+	var taskID string
+	if h.queueClient != nil {
+		var err error
+		taskID, err = h.queueClient.EnqueueScrape(r.Context(), jobID, req.URL, req.ExtractLinks)
+		if err != nil {
+			respondError(w, fmt.Sprintf("Failed to enqueue scrape task: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Update job with Asynq task ID
+		if err := h.storage.UpdateScrapeJobTaskID(jobID, taskID); err != nil {
+			log.Printf("Warning: Failed to update task ID for job %s: %v", jobID, err)
+		}
+	}
+
+	respondJSON(w, job, http.StatusOK)
 }
 
 // CreateTextAnalysisRequest creates a new async text analysis request
@@ -1215,11 +1248,34 @@ func (h *Handler) ListScrapeRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requests := h.scrapeRequests.List()
+	// Parse pagination parameters
+	limit := 50
+	offset := 0
+
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
+			limit = parsedLimit
+		}
+	}
+
+	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
+		if parsedOffset, err := strconv.Atoi(offsetStr); err == nil && parsedOffset >= 0 {
+			offset = parsedOffset
+		}
+	}
+
+	// Query jobs from database
+	jobs, err := h.storage.ListScrapeJobs(limit, offset)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to list scrape jobs: %v", err), http.StatusInternalServerError)
+		return
+	}
 
 	response := map[string]interface{}{
-		"requests": requests,
-		"count":    len(requests),
+		"requests": jobs,
+		"count":    len(jobs),
+		"limit":    limit,
+		"offset":   offset,
 	}
 
 	respondJSON(w, response, http.StatusOK)
@@ -1238,13 +1294,18 @@ func (h *Handler) GetScrapeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, ok := h.scrapeRequests.Get(id)
-	if !ok {
+	job, err := h.storage.GetScrapeJob(id)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to get scrape job: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if job == nil {
 		respondError(w, "Scrape request not found", http.StatusNotFound)
 		return
 	}
 
-	respondJSON(w, req, http.StatusOK)
+	respondJSON(w, job, http.StatusOK)
 }
 
 // RetryScrapeRequest retries a failed scrape request
@@ -1260,28 +1321,46 @@ func (h *Handler) RetryScrapeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	req, ok := h.scrapeRequests.Get(id)
-	if !ok {
+	job, err := h.storage.GetScrapeJob(id)
+	if err != nil {
+		respondError(w, fmt.Sprintf("Failed to get scrape job: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if job == nil {
 		respondError(w, "Scrape request not found", http.StatusNotFound)
 		return
 	}
 
 	// Only allow retrying failed requests
-	if req.Status != scraper_requests.StatusFailed {
+	if job.Status != "failed" {
 		respondError(w, "Can only retry failed requests", http.StatusBadRequest)
 		return
 	}
 
-	// Reset request state
-	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusPending, 0)
-	req.ErrorMessage = ""
+	// Reset job status
+	if err := h.storage.UpdateScrapeJobStatus(id, "queued", ""); err != nil {
+		respondError(w, fmt.Sprintf("Failed to update job status: %v", err), http.StatusInternalServerError)
+		return
+	}
 
-	// Start background scraping
-	go h.processScrapeRequest(id, req.URL, req.ExtractLinks)
+	// Re-enqueue task to Asynq (skip if queueClient is nil for testing)
+	if h.queueClient != nil {
+		taskID, err := h.queueClient.EnqueueScrape(r.Context(), id, job.URL, job.ExtractLinks)
+		if err != nil {
+			respondError(w, fmt.Sprintf("Failed to enqueue scrape task: %v", err), http.StatusInternalServerError)
+			return
+		}
 
-	// Get updated request
-	updatedReq, _ := h.scrapeRequests.Get(id)
-	respondJSON(w, updatedReq, http.StatusOK)
+		// Update job with new Asynq task ID
+		if err := h.storage.UpdateScrapeJobTaskID(id, taskID); err != nil {
+			log.Printf("Warning: Failed to update task ID for job %s: %v", id, err)
+		}
+	}
+
+	// Get updated job
+	updatedJob, _ := h.storage.GetScrapeJob(id)
+	respondJSON(w, updatedJob, http.StatusOK)
 }
 
 // DeleteScrapeRequest deletes a scrape request
@@ -1297,226 +1376,18 @@ func (h *Handler) DeleteScrapeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !h.scrapeRequests.Delete(id) {
-		respondError(w, "Scrape request not found", http.StatusNotFound)
+	// Note: This only deletes the job record, not the actual task from Asynq
+	// In-flight tasks will continue processing
+	if err := h.storage.DeleteScrapeJob(id); err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			respondError(w, "Scrape request not found", http.StatusNotFound)
+			return
+		}
+		respondError(w, fmt.Sprintf("Failed to delete scrape job: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	respondJSON(w, map[string]string{"status": "deleted"}, http.StatusOK)
-}
-
-// processScrapeRequest processes a scrape request in the background
-func (h *Handler) processScrapeRequest(id, url string, extractLinks bool) {
-	// Update status to processing
-	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 10)
-
-	// Score the URL first
-	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 30)
-	scoreResp, err := h.scraper.ScoreLink(context.Background(), url)
-	if err != nil {
-		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to score link: %v", err))
-		return
-	}
-
-	// Check if this is an image URL (skip threshold check for images)
-	isImageURL := false
-	for _, category := range scoreResp.Score.Categories {
-		if category == "image" {
-			isImageURL = true
-			break
-		}
-	}
-
-	// Check score threshold (skip for image URLs)
-	if !isImageURL && scoreResp.Score.Score < h.linkScoreThreshold {
-		// Save a tombstoned record for low-quality content
-		tombstoneTime := time.Now().UTC().Add(72 * time.Hour) // Tombstone in 3 days
-		requestID := uuid.New().String()
-
-		// Add domain name to tags
-		tags := scoreResp.Score.Categories
-		if domain := extractDomainTag(url); domain != "" {
-			tags = append(tags, domain)
-		}
-
-		record := &storage.Request{
-			ID:         requestID,
-			CreatedAt:  time.Now().UTC(),
-			SourceType: "url",
-			SourceURL:  &url,
-			Tags:       tags,
-			SEOEnabled: false, // Disable SEO for below-threshold content
-			Metadata: map[string]interface{}{
-				"link_score": map[string]interface{}{
-					"score":                scoreResp.Score.Score,
-					"reason":               scoreResp.Score.Reason,
-					"categories":           scoreResp.Score.Categories,
-					"is_recommended":       scoreResp.Score.IsRecommended,
-					"malicious_indicators": scoreResp.Score.MaliciousIndicators,
-				},
-				"below_threshold":    true,
-				"threshold":          h.linkScoreThreshold,
-				"tombstone_datetime": tombstoneTime.Format(time.RFC3339), // Auto-tombstone low quality content
-			},
-		}
-
-		if err := h.storage.SaveRequest(record); err != nil {
-			h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to save low-quality record: %v", err))
-			return
-		}
-
-		h.scrapeRequests.SetCompleted(id, requestID)
-		log.Printf("Low-quality URL marked for tombstoning: %s (score: %.2f, threshold: %.2f)", url, scoreResp.Score.Score, h.linkScoreThreshold)
-		return
-	}
-
-	// Scrape the URL
-	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 50)
-	scrapeResp, err := h.scraper.Scrape(context.Background(), url)
-	if err != nil {
-		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to scrape: %v", err))
-		return
-	}
-
-	// Build scraper metadata from the scraper response
-	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 70)
-	scraperMetadata := make(map[string]interface{})
-	scraperMetadata["title"] = scrapeResp.Title
-	scraperMetadata["content"] = scrapeResp.Content
-	scraperMetadata["raw_text"] = scrapeResp.RawText // Include original raw text
-	scraperMetadata["url"] = scrapeResp.URL
-
-	// Also include fields from the scraper's Metadata (description, keywords, etc.)
-	if scrapeResp.Metadata != nil {
-		for k, v := range scrapeResp.Metadata {
-			scraperMetadata[k] = v
-		}
-	}
-
-	// Analyze the content (skip for image URLs)
-	var analyzeResp *clients.TextAnalyzerResponse
-	if !isImageURL {
-		h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 80)
-		analyzeResp, err = h.textAnalyzer.Analyze(context.Background(), scrapeResp.Content)
-		if err != nil {
-			h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to analyze: %v", err))
-			return
-		}
-	}
-
-	h.scrapeRequests.UpdateStatus(id, scraper_requests.StatusProcessing, 90)
-
-	// Combine metadata
-	combinedMetadata := make(map[string]interface{})
-	combinedMetadata["scraper_metadata"] = scraperMetadata
-	if analyzeResp != nil {
-		combinedMetadata["analyzer_metadata"] = analyzeResp.Metadata
-	}
-
-	// Add link score
-	if scrapeResp.Score != nil {
-		combinedMetadata["link_score"] = map[string]interface{}{
-			"score":                scrapeResp.Score.Score,
-			"reason":               scrapeResp.Score.Reason,
-			"categories":           scrapeResp.Score.Categories,
-			"is_recommended":       scrapeResp.Score.IsRecommended,
-			"malicious_indicators": scrapeResp.Score.MaliciousIndicators,
-		}
-	} else {
-		// Fallback to preliminary score if scraper didn't return one
-		combinedMetadata["link_score"] = map[string]interface{}{
-			"score":                scoreResp.Score.Score,
-			"reason":               scoreResp.Score.Reason,
-			"categories":           scoreResp.Score.Categories,
-			"is_recommended":       scoreResp.Score.IsRecommended,
-			"malicious_indicators": scoreResp.Score.MaliciousIndicators,
-		}
-	}
-
-	// Save to database
-	requestID := uuid.New().String()
-
-	// Get tags and analyzer UUID (handle nil for image URLs)
-	var tags []string
-	var analyzerUUID string
-	if analyzeResp != nil {
-		tags = analyzeResp.GetTags()
-		analyzerUUID = analyzeResp.ID
-	} else {
-		// For image URLs, use categories from link score as tags
-		if scrapeResp.Score != nil {
-			tags = scrapeResp.Score.Categories
-		}
-	}
-
-	// Add domain name to tags
-	if domain := extractDomainTag(url); domain != "" {
-		tags = append(tags, domain)
-	}
-
-	// Extract slug from scraper response if available
-	var slug *string
-	if scrapeResp.Slug != "" {
-		slug = &scrapeResp.Slug
-	}
-
-	req := &storage.Request{
-		ID:               requestID,
-		CreatedAt:        time.Now(),
-		SourceType:       "url",
-		SourceURL:        &url,
-		ScraperUUID:      &scrapeResp.ID,
-		TextAnalyzerUUID: analyzerUUID,
-		Tags:             tags,
-		Metadata:         combinedMetadata,
-		Slug:             slug,
-		SEOEnabled:       true, // Enable SEO by default
-	}
-
-	if err := h.storage.SaveRequest(req); err != nil {
-		h.scrapeRequests.SetFailed(id, fmt.Sprintf("Failed to save: %v", err))
-		return
-	}
-
-	// Mark as completed
-	h.scrapeRequests.SetCompleted(id, requestID)
-	log.Printf("Scrape request %s completed successfully, result saved as %s", id, requestID)
-
-	// Extract links if requested (skip for image URLs)
-	if extractLinks && !isImageURL {
-		log.Printf("Extracting links from %s", url)
-		extractResp, err := h.scraper.ExtractLinks(context.Background(), url)
-		if err != nil {
-			log.Printf("Failed to extract links from %s: %v", url, err)
-			return
-		}
-
-		// Create scrape requests for extracted links (limit to top 10 by length)
-		links := extractResp.Links
-		if len(links) > 10 {
-			// Sort by length descending and take top 10
-			sortedLinks := make([]string, len(links))
-			copy(sortedLinks, links)
-			// Simple bubble sort for top 10 longest
-			for i := 0; i < len(sortedLinks); i++ {
-				for j := i + 1; j < len(sortedLinks); j++ {
-					if len(sortedLinks[j]) > len(sortedLinks[i]) {
-						sortedLinks[i], sortedLinks[j] = sortedLinks[j], sortedLinks[i]
-					}
-				}
-			}
-			links = sortedLinks[:10]
-		}
-
-		log.Printf("Creating scrape requests for %d extracted links", len(links))
-		for _, link := range links {
-			// Create scrape request for each link (without extract_links to avoid infinite recursion)
-			scrapeReq, isNew := h.scrapeRequests.Create(link, false)
-			if isNew {
-				go h.processScrapeRequest(scrapeReq.ID, link, false)
-			}
-		}
-	}
 }
 
 // processTextAnalysisRequest processes a text analysis request in the background

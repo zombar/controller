@@ -16,6 +16,9 @@ type Config struct {
 	LinkScoreThreshold  float64 // Minimum score for link recommendation (0.0-1.0)
 	GenerateMockData    bool    // Generate 6 months of mock historical data on startup (~600 documents)
 	WebInterfaceURL     string  // URL for the web interface (for footer links on static pages)
+	RedisAddr           string  // Redis address for queue backend
+	WorkerConcurrency   int     // Number of concurrent workers for processing tasks
+	MaxLinkDepth        int     // Maximum depth for link extraction (0 = no links, 1 = extract only from root URL)
 }
 
 // Load reads configuration from environment variables
@@ -29,6 +32,9 @@ func Load() (*Config, error) {
 		LinkScoreThreshold:  getEnvAsFloat("LINK_SCORE_THRESHOLD", 0.5),
 		GenerateMockData:    getEnvAsBool("GENERATE_MOCK_DATA", false),
 		WebInterfaceURL:     getEnv("WEB_INTERFACE_URL", "http://localhost:5173"),
+		RedisAddr:           getEnv("REDIS_ADDR", "localhost:6379"),
+		WorkerConcurrency:   getEnvAsInt("WORKER_CONCURRENCY", 10),
+		MaxLinkDepth:        getEnvAsInt("MAX_LINK_DEPTH", 1),
 	}
 
 	if err := config.Validate(); err != nil {
@@ -57,6 +63,15 @@ func (c *Config) Validate() error {
 	}
 	if c.LinkScoreThreshold < 0.0 || c.LinkScoreThreshold > 1.0 {
 		return fmt.Errorf("LINK_SCORE_THRESHOLD must be between 0.0 and 1.0")
+	}
+	if c.RedisAddr == "" {
+		return fmt.Errorf("REDIS_ADDR is required")
+	}
+	if c.WorkerConcurrency <= 0 {
+		return fmt.Errorf("WORKER_CONCURRENCY must be greater than 0")
+	}
+	if c.MaxLinkDepth < 0 {
+		return fmt.Errorf("MAX_LINK_DEPTH must be >= 0")
 	}
 	return nil
 }

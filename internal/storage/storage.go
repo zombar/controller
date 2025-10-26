@@ -143,6 +143,11 @@ func (s *Storage) Close() error {
 	return s.db.Close()
 }
 
+// DB returns the underlying database connection for metrics collection
+func (s *Storage) DB() *sql.DB {
+	return s.db
+}
+
 // SaveRequest saves a new request record
 func (s *Storage) SaveRequest(req *Request) error {
 	tagsJSON, err := json.Marshal(req.Tags)

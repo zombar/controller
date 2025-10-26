@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,9 +12,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/zombar/controller/internal/clients"
 	"github.com/zombar/controller/internal/storage"
 )
+
+// mockQueueClient is a test implementation of queue.Client
+type mockQueueClient struct{}
+
+func (m *mockQueueClient) EnqueueScrape(ctx context.Context, jobID, url string, extractLinks bool) (string, error) {
+	// Return a fake task ID for testing
+	return "test-task-" + uuid.New().String(), nil
+}
+
+func (m *mockQueueClient) EnqueueScrapeWithDelay(ctx context.Context, jobID, url string, extractLinks bool, delay time.Duration) (string, error) {
+	return "test-task-" + uuid.New().String(), nil
+}
+
+func (m *mockQueueClient) Close() error {
+	return nil
+}
 
 // mockScraperServer creates a mock scraper HTTP server
 func mockScraperServer() *httptest.Server {
@@ -174,7 +192,7 @@ func setupTestHandler(t *testing.T) (*Handler, *httptest.Server, *httptest.Serve
 	scraperClient := clients.NewScraperClient(scraperMock.URL)
 	textAnalyzerClient := clients.NewTextAnalyzerClient(textAnalyzerMock.URL)
 
-	handler := New(store, scraperClient, textAnalyzerClient, nil, 0.5, "", scraperMock.URL)
+	handler := New(store, scraperClient, textAnalyzerClient, nil, nil, 0.5, "", scraperMock.URL)
 
 	cleanup := func() {
 		store.Close()
@@ -245,20 +263,26 @@ func TestScrapeURL(t *testing.T) {
 	if response.TextAnalyzerUUID != "analyzer-test-uuid" {
 		t.Errorf("Expected analyzer UUID 'analyzer-test-uuid', got '%s'", response.TextAnalyzerUUID)
 	}
-	// Expect 4 tags: 3 from analyzer + 1 domain tag (example.com)
-	if len(response.Tags) != 4 {
-		t.Errorf("Expected 4 tags (3 from analyzer + domain), got %d: %v", len(response.Tags), response.Tags)
+	// Expect 5 tags: 3 from analyzer + 1 domain tag (example.com) + 1 scrape tag
+	if len(response.Tags) != 5 {
+		t.Errorf("Expected 5 tags (3 from analyzer + domain + scrape), got %d: %v", len(response.Tags), response.Tags)
 	}
-	// Verify domain tag is present
+	// Verify domain tag and scrape tag are present
 	hasDomainTag := false
+	hasScrapeTag := false
 	for _, tag := range response.Tags {
 		if tag == "example.com" {
 			hasDomainTag = true
-			break
+		}
+		if tag == "scrape" {
+			hasScrapeTag = true
 		}
 	}
 	if !hasDomainTag {
 		t.Error("Expected domain tag 'example.com' to be present in tags")
+	}
+	if !hasScrapeTag {
+		t.Error("Expected 'scrape' tag to be present in tags")
 	}
 }
 
@@ -880,12 +904,17 @@ func TestCreateScrapeRequest(t *testing.T) {
 		t.Error("Expected status field")
 	}
 
-	if response["progress"] == nil {
-		t.Error("Expected progress field")
+	if response["status"].(string) != "queued" {
+		t.Errorf("Expected status 'queued', got '%v'", response["status"])
 	}
 
-	if response["expires_at"] == nil {
-		t.Error("Expected expires_at field")
+	// Queue-based system includes created_at and updated_at timestamps
+	if response["created_at"] == nil {
+		t.Error("Expected created_at field")
+	}
+
+	if response["updated_at"] == nil {
+		t.Error("Expected updated_at field")
 	}
 }
 
@@ -908,7 +937,7 @@ func TestCreateScrapeRequestDuplicate(t *testing.T) {
 	json.NewDecoder(w1.Body).Decode(&response1)
 	id1 := response1["id"].(string)
 
-	// Create duplicate request
+	// Create duplicate request - queue system creates a new job each time
 	req2 := httptest.NewRequest(http.MethodPost, "/api/scrape-requests", bytes.NewBuffer(jsonData))
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
@@ -918,8 +947,14 @@ func TestCreateScrapeRequestDuplicate(t *testing.T) {
 	json.NewDecoder(w2.Body).Decode(&response2)
 	id2 := response2["id"].(string)
 
-	if id1 != id2 {
-		t.Errorf("Expected duplicate URL to return same request ID: %s != %s", id1, id2)
+	// In the queue-based system, each request creates a new job
+	if id1 == id2 {
+		t.Errorf("Expected new job to have different ID, but both are: %s", id1)
+	}
+
+	// Both jobs should have status "queued"
+	if response1["status"].(string) != "queued" || response2["status"].(string) != "queued" {
+		t.Error("Expected both jobs to have status 'queued'")
 	}
 }
 
