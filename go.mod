@@ -6,6 +6,7 @@ toolchain go1.24.9
 
 require (
 	github.com/google/uuid v1.6.0
+	github.com/zombar/purpletab/pkg/tracing v0.0.0-00010101000000-000000000000
 	golang.org/x/text v0.30.0
 	modernc.org/sqlite v1.39.1
 )
@@ -21,3 +22,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/zombar/purpletab/pkg/tracing => ../../pkg/tracing
