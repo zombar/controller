@@ -294,7 +294,7 @@ func main() {
 	mux.HandleFunc("/images-sitemap.xml", handler.ServeImageSitemap) // XML image sitemap
 	mux.HandleFunc("/robots.txt", handler.ServeRobotsTxt)        // Robots.txt for crawlers
 
-	// Setup server with middleware chain: CORS -> HTTP logging -> tracing -> handlers
+	// Setup server with middleware chain: CORS -> HTTP logging -> metrics -> tracing -> handlers
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	var httpHandler http.Handler = mux
 
@@ -302,6 +302,9 @@ func main() {
 	if tp != nil {
 		httpHandler = tracing.HTTPMiddleware("docutab-controller")(httpHandler)
 	}
+
+	// Add HTTP metrics middleware
+	httpHandler = metrics.HTTPMiddleware("controller")(httpHandler)
 
 	// Add HTTP request logging
 	httpHandler = logging.HTTPLoggingMiddleware(logger)(httpHandler)
