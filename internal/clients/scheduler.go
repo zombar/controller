@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -41,6 +42,7 @@ func NewSchedulerClient(baseURL string) *SchedulerClient {
 		baseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
+			Transport: otelhttp.NewTransport(http.DefaultTransport), // Inject trace context headers
 		},
 	}
 }

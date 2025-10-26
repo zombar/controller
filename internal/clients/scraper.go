@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -43,6 +44,7 @@ func NewScraperClient(baseURL string) *ScraperClient {
 		baseURL: baseURL,
 		httpClient: &http.Client{
 			Timeout: 10 * time.Minute, // Web scraping can take several minutes
+			Transport: otelhttp.NewTransport(http.DefaultTransport), // Inject trace context headers
 		},
 	}
 }
