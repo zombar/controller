@@ -102,10 +102,17 @@ func extractEffectiveDate(metadata map[string]interface{}, fallback time.Time) t
 // New creates a new Storage instance and runs migrations
 func New(databasePath string) (*Storage, error) {
 	log.Printf("Opening database at: %s", databasePath)
-	db, err := sql.Open("sqlite", databasePath)
+	// Add connection parameters for better concurrency handling
+	// WAL mode allows concurrent reads and writes
+	// Busy timeout prevents immediate failures on concurrent access
+	connStr := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL", databasePath)
+	db, err := sql.Open("sqlite", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
+
+	// Limit connection pool to 1 to prevent transaction conflicts
+	db.SetMaxOpenConns(1)
 
 	log.Println("Testing database connection...")
 	if err := db.Ping(); err != nil {
@@ -825,8 +832,15 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 		return fmt.Errorf("failed to marshal tags: %w", err)
 	}
 
+	// Begin transaction to ensure atomicity
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback()
+
 	// Update tags in database
-	result, err := s.db.Exec("UPDATE requests SET tags_json = ? WHERE id = ?", string(tagsJSON), id)
+	result, err := tx.Exec("UPDATE requests SET tags_json = ? WHERE id = ?", string(tagsJSON), id)
 	if err != nil {
 		return fmt.Errorf("failed to update tags: %w", err)
 	}
@@ -841,15 +855,20 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 	}
 
 	// Delete existing tag associations
-	if _, err := s.db.Exec("DELETE FROM tags WHERE request_id = ?", id); err != nil {
+	if _, err := tx.Exec("DELETE FROM tags WHERE request_id = ?", id); err != nil {
 		return fmt.Errorf("failed to delete old tag associations: %w", err)
 	}
 
 	// Insert new tag associations
 	for _, tag := range tags {
-		if _, err := s.db.Exec("INSERT INTO tags (request_id, tag) VALUES (?, ?)", id, tag); err != nil {
+		if _, err := tx.Exec("INSERT INTO tags (request_id, tag) VALUES (?, ?)", id, tag); err != nil {
 			return fmt.Errorf("failed to insert tag association: %w", err)
 		}
+	}
+
+	// Commit transaction
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return nil
