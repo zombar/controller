@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -13,6 +13,7 @@ import (
 	"github.com/zombar/controller/internal/config"
 	"github.com/zombar/controller/internal/handlers"
 	"github.com/zombar/controller/internal/storage"
+	"github.com/zombar/controller/pkg/logging"
 	"github.com/zombar/purpletab/pkg/tracing"
 )
 
@@ -37,37 +38,47 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 func main() {
+	// Setup structured logging with JSON output
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	}))
+	slog.SetDefault(logger)
+
+	logger.Info("controller service initializing", "version", "1.0.0")
+
 	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Failed to load configuration: %v", err)
+		logger.Error("failed to load configuration", "error", err)
+		os.Exit(1)
 	}
 
 	// Initialize tracing
 	tp, err := tracing.InitTracer("docutab-controller")
 	if err != nil {
-		log.Printf("Warning: failed to initialize tracer, continuing without tracing: %v", err)
+		logger.Warn("failed to initialize tracer, continuing without tracing", "error", err)
 	} else {
 		defer func() {
 			if err := tp.Shutdown(context.Background()); err != nil {
-				log.Printf("Error shutting down tracer: %v", err)
+				logger.Error("error shutting down tracer", "error", err)
 			}
 		}()
-		log.Println("Tracing initialized successfully")
+		logger.Info("tracing initialized successfully")
 	}
 
 	// Initialize storage
 	store, err := storage.New(cfg.DatabasePath)
 	if err != nil {
-		log.Fatalf("Failed to initialize storage: %v", err)
+		logger.Error("failed to initialize storage", "error", err)
+		os.Exit(1)
 	}
 	defer store.Close()
 
 	// Generate mock data if enabled
 	if cfg.GenerateMockData {
-		log.Println("Mock data generation enabled")
+		logger.Info("mock data generation enabled")
 		if err := store.GenerateMockData(); err != nil {
-			log.Printf("Warning: Failed to generate mock data: %v", err)
+			logger.Warn("failed to generate mock data", "error", err)
 		}
 	}
 
@@ -236,7 +247,7 @@ func main() {
 	mux.HandleFunc("/images-sitemap.xml", handler.ServeImageSitemap) // XML image sitemap
 	mux.HandleFunc("/robots.txt", handler.ServeRobotsTxt)        // Robots.txt for crawlers
 
-	// Setup server with tracing and CORS middleware
+	// Setup server with middleware chain: CORS -> HTTP logging -> tracing -> handlers
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	var httpHandler http.Handler = mux
 
@@ -244,6 +255,9 @@ func main() {
 	if tp != nil {
 		httpHandler = tracing.HTTPMiddleware("docutab-controller")(httpHandler)
 	}
+
+	// Add HTTP request logging
+	httpHandler = logging.HTTPLoggingMiddleware(logger)(httpHandler)
 
 	// Apply CORS middleware
 	httpHandler = corsMiddleware(httpHandler)
@@ -259,26 +273,29 @@ func main() {
 
 	// Start server in a goroutine
 	go func() {
-		log.Printf("Controller service starting on port %d", cfg.Port)
-		log.Printf("Scraper URL: %s", cfg.ScraperBaseURL)
-		log.Printf("TextAnalyzer URL: %s", cfg.TextAnalyzerBaseURL)
-		log.Printf("Scheduler URL: %s", cfg.SchedulerBaseURL)
-		log.Printf("Database: %s", cfg.DatabasePath)
-		log.Printf("Link Score Threshold: %.2f", cfg.LinkScoreThreshold)
+		logger.Info("controller service starting",
+			"port", cfg.Port,
+			"scraper_url", cfg.ScraperBaseURL,
+			"textanalyzer_url", cfg.TextAnalyzerBaseURL,
+			"scheduler_url", cfg.SchedulerBaseURL,
+			"database", cfg.DatabasePath,
+			"link_score_threshold", cfg.LinkScoreThreshold,
+		)
 
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+			logger.Error("server failed", "error", err)
+			os.Exit(1)
 		}
 	}()
 
 	// Wait for shutdown signal
 	<-shutdown
-	log.Println("Shutting down controller service...")
+	logger.Info("shutting down controller service")
 
 	// Close storage
 	if err := store.Close(); err != nil {
-		log.Printf("Error closing storage: %v", err)
+		logger.Error("error closing storage", "error", err)
 	}
 
-	log.Println("Controller service stopped")
+	logger.Info("controller service stopped")
 }
