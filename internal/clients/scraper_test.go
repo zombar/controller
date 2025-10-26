@@ -1,6 +1,7 @@
 package clients
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -81,7 +82,7 @@ func TestScraperClient_Scrape(t *testing.T) {
 			client := NewScraperClient(server.URL)
 
 			// Execute
-			result, err := client.Scrape(tt.url)
+			result, err := client.Scrape(context.Background(), tt.url)
 
 			// Verify
 			if tt.expectError {
@@ -116,7 +117,7 @@ func TestScraperClient_InvalidJSON(t *testing.T) {
 	defer server.Close()
 
 	client := NewScraperClient(server.URL)
-	_, err := client.Scrape("https://example.com")
+	_, err := client.Scrape(context.Background(), "https://example.com")
 
 	if err == nil {
 		t.Error("Expected error for invalid JSON but got none")
@@ -126,7 +127,7 @@ func TestScraperClient_InvalidJSON(t *testing.T) {
 func TestScraperClient_NetworkError(t *testing.T) {
 	// Use an invalid URL that will cause network error
 	client := NewScraperClient("http://localhost:99999")
-	_, err := client.Scrape("https://example.com")
+	_, err := client.Scrape(context.Background(), "https://example.com")
 
 	if err == nil {
 		t.Error("Expected network error but got none")
@@ -184,7 +185,7 @@ func TestScraperClient_ExtractLinks(t *testing.T) {
 			defer server.Close()
 
 			client := NewScraperClient(server.URL)
-			result, err := client.ExtractLinks(tt.url)
+			result, err := client.ExtractLinks(context.Background(), tt.url)
 
 			if tt.expectError {
 				if err == nil {
@@ -282,7 +283,7 @@ func TestScraperClient_SearchImagesByTags(t *testing.T) {
 			defer server.Close()
 
 			client := NewScraperClient(server.URL)
-			result, err := client.SearchImagesByTags(tt.tags)
+			result, err := client.SearchImagesByTags(context.Background(), tt.tags)
 
 			if tt.expectError {
 				if err == nil {
@@ -372,7 +373,7 @@ func TestScraperClient_GetImagesByScrapeID(t *testing.T) {
 			defer server.Close()
 
 			client := NewScraperClient(server.URL)
-			result, err := client.GetImagesByScrapeID(tt.scrapeID)
+			result, err := client.GetImagesByScrapeID(context.Background(), tt.scrapeID)
 
 			if tt.expectError {
 				if err == nil {
