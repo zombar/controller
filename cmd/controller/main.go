@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/zombar/controller/internal/config"
 	"github.com/zombar/controller/internal/handlers"
 	"github.com/zombar/controller/internal/storage"
+	"github.com/zombar/purpletab/pkg/tracing"
 )
 
 // corsMiddleware adds CORS headers to allow web UI access
@@ -39,6 +41,19 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// Initialize tracing
+	tp, err := tracing.InitTracer("docutab-controller")
+	if err != nil {
+		log.Printf("Warning: failed to initialize tracer, continuing without tracing: %v", err)
+	} else {
+		defer func() {
+			if err := tp.Shutdown(context.Background()); err != nil {
+				log.Printf("Error shutting down tracer: %v", err)
+			}
+		}()
+		log.Println("Tracing initialized successfully")
 	}
 
 	// Initialize storage
@@ -221,11 +236,21 @@ func main() {
 	mux.HandleFunc("/images-sitemap.xml", handler.ServeImageSitemap) // XML image sitemap
 	mux.HandleFunc("/robots.txt", handler.ServeRobotsTxt)        // Robots.txt for crawlers
 
-	// Setup server with CORS middleware
+	// Setup server with tracing and CORS middleware
 	addr := fmt.Sprintf(":%d", cfg.Port)
+	var httpHandler http.Handler = mux
+
+	// Wrap with tracing middleware if initialized
+	if tp != nil {
+		httpHandler = tracing.HTTPMiddleware("docutab-controller")(httpHandler)
+	}
+
+	// Apply CORS middleware
+	httpHandler = corsMiddleware(httpHandler)
+
 	server := &http.Server{
 		Addr:    addr,
-		Handler: corsMiddleware(mux),
+		Handler: httpHandler,
 	}
 
 	// Setup graceful shutdown

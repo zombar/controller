@@ -1,6 +1,7 @@
 package clients
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -84,7 +85,7 @@ func TestTextAnalyzerClient_Analyze(t *testing.T) {
 			client := NewTextAnalyzerClient(server.URL)
 
 			// Execute
-			result, err := client.Analyze(tt.text)
+			result, err := client.Analyze(context.Background(), tt.text)
 
 			// Verify
 			if tt.expectError {
@@ -201,7 +202,7 @@ func TestTextAnalyzerClient_InvalidJSON(t *testing.T) {
 	defer server.Close()
 
 	client := NewTextAnalyzerClient(server.URL)
-	_, err := client.Analyze("test text")
+	_, err := client.Analyze(context.Background(), "test text")
 
 	if err == nil {
 		t.Error("Expected error for invalid JSON but got none")
@@ -211,7 +212,7 @@ func TestTextAnalyzerClient_InvalidJSON(t *testing.T) {
 func TestTextAnalyzerClient_NetworkError(t *testing.T) {
 	// Use an invalid URL that will cause network error
 	client := NewTextAnalyzerClient("http://localhost:99999")
-	_, err := client.Analyze("test text")
+	_, err := client.Analyze(context.Background(), "test text")
 
 	if err == nil {
 		t.Error("Expected network error but got none")
