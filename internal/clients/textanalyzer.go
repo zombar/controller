@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -32,7 +33,17 @@ type TextAnalyzerResponse struct {
 	Metadata map[string]interface{} `json:"metadata"`
 }
 
-// GetTags extracts tags from the metadata
+// NormalizeTag ensures a tag is at most double-barrelled (max one hyphen)
+// Examples: "machine-learning" stays as is, "machine-learning-model" becomes "machine-learning"
+func NormalizeTag(tag string) string {
+	parts := strings.Split(tag, "-")
+	if len(parts) <= 2 {
+		return tag
+	}
+	return strings.Join(parts[:2], "-")
+}
+
+// GetTags extracts tags from the metadata and normalizes them to be at most double-barrelled
 func (r *TextAnalyzerResponse) GetTags() []string {
 	if r.Metadata == nil {
 		return []string{}
@@ -41,7 +52,8 @@ func (r *TextAnalyzerResponse) GetTags() []string {
 		result := make([]string, 0, len(tags))
 		for _, tag := range tags {
 			if tagStr, ok := tag.(string); ok {
-				result = append(result, tagStr)
+				normalized := NormalizeTag(tagStr)
+				result = append(result, normalized)
 			}
 		}
 		return result
