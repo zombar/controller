@@ -10,6 +10,7 @@ import (
 	"github.com/hibiken/asynq"
 	"github.com/zombar/controller/internal/clients"
 	"github.com/zombar/controller/internal/storage"
+	"github.com/zombar/purpletab/pkg/metrics"
 )
 
 // URLCache defines the interface for URL caching
@@ -52,25 +53,28 @@ func (l *slogAdapter) Fatal(args ...interface{}) {
 
 // Worker wraps the Asynq server for processing tasks
 type Worker struct {
-	server              *asynq.Server
-	mux                 *asynq.ServeMux
-	storage             *storage.Storage
-	scraperClient       *clients.ScraperClient
-	textAnalyzerClient  *clients.TextAnalyzerClient
-	linkScoreThreshold  float64
-	concurrency         int
-	logger              *slog.Logger
-	queueClient         *Client
-	maxLinkDepth        int
-	urlCache            URLCache
+	server                  *asynq.Server
+	mux                     *asynq.ServeMux
+	storage                 *storage.Storage
+	scraperClient           *clients.ScraperClient
+	textAnalyzerClient      *clients.TextAnalyzerClient
+	linkScoreThreshold      float64
+	concurrency             int
+	logger                  *slog.Logger
+	queueClient             *Client
+	maxLinkDepth            int
+	urlCache                URLCache
+	tombstonePeriodLowScore int // Days until deletion for low-score URLs
+	businessMetrics         *metrics.BusinessMetrics
 }
 
 // WorkerConfig contains configuration for the queue worker
 type WorkerConfig struct {
-	RedisAddr          string
-	Concurrency        int
-	LinkScoreThreshold float64
-	MaxLinkDepth       int
+	RedisAddr               string
+	Concurrency             int
+	LinkScoreThreshold      float64
+	MaxLinkDepth            int
+	TombstonePeriodLowScore int // Days until deletion for low-score URLs
 }
 
 // NewWorker creates a new queue worker
@@ -81,6 +85,7 @@ func NewWorker(
 	textAnalyzerClient *clients.TextAnalyzerClient,
 	queueClient *Client,
 	urlCache URLCache,
+	businessMetrics *metrics.BusinessMetrics,
 ) *Worker {
 	redisOpt := asynq.RedisClientOpt{
 		Addr: cfg.RedisAddr,
@@ -136,17 +141,19 @@ func NewWorker(
 	mux := asynq.NewServeMux()
 
 	w := &Worker{
-		server:              server,
-		mux:                 mux,
-		storage:             storage,
-		scraperClient:       scraperClient,
-		textAnalyzerClient:  textAnalyzerClient,
-		linkScoreThreshold:  cfg.LinkScoreThreshold,
-		concurrency:         cfg.Concurrency,
-		logger:              slog.Default(),
-		queueClient:         queueClient,
-		maxLinkDepth:        cfg.MaxLinkDepth,
-		urlCache:            urlCache,
+		server:                  server,
+		mux:                     mux,
+		storage:                 storage,
+		scraperClient:           scraperClient,
+		textAnalyzerClient:      textAnalyzerClient,
+		linkScoreThreshold:      cfg.LinkScoreThreshold,
+		concurrency:             cfg.Concurrency,
+		logger:                  slog.Default(),
+		queueClient:             queueClient,
+		maxLinkDepth:            cfg.MaxLinkDepth,
+		urlCache:                urlCache,
+		tombstonePeriodLowScore: cfg.TombstonePeriodLowScore,
+		businessMetrics:         businessMetrics,
 	}
 
 	// Register task handlers

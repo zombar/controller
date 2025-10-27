@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds all configuration for the controller service
@@ -23,6 +24,12 @@ type Config struct {
 	RedisAddr           string  // Redis address for queue backend
 	WorkerConcurrency   int     // Number of concurrent workers for processing tasks
 	MaxLinkDepth        int     // Maximum depth for link extraction (0 = no links, 1 = extract only from root URL)
+
+	// Tombstone configuration
+	TombstoneTags           []string // Tags that trigger auto-tombstone (default: low-quality,sparse-content)
+	TombstonePeriodLowScore int      // Days until deletion for low-score URLs (default: 30)
+	TombstonePeriodTagBased int      // Days until deletion for tagged content (default: 90)
+	TombstonePeriodManual   int      // Days until deletion for manual tombstones (default: 90)
 }
 
 // Load reads configuration from environment variables
@@ -43,6 +50,12 @@ func Load() (*Config, error) {
 		RedisAddr:           getEnv("REDIS_ADDR", "localhost:6379"),
 		WorkerConcurrency:   getEnvAsInt("WORKER_CONCURRENCY", 10),
 		MaxLinkDepth:        getEnvAsInt("MAX_LINK_DEPTH", 1),
+
+		// Tombstone configuration
+		TombstoneTags:           getEnvAsStringSlice("TOMBSTONE_TAGS", []string{"low-quality", "sparse-content"}),
+		TombstonePeriodLowScore: getEnvAsInt("TOMBSTONE_PERIOD_LOW_SCORE", 30),
+		TombstonePeriodTagBased: getEnvAsInt("TOMBSTONE_PERIOD_TAG_BASED", 90),
+		TombstonePeriodManual:   getEnvAsInt("TOMBSTONE_PERIOD_MANUAL", 90),
 	}
 
 	if err := config.Validate(); err != nil {
@@ -90,6 +103,18 @@ func (c *Config) Validate() error {
 	if c.MaxLinkDepth < 0 {
 		return fmt.Errorf("MAX_LINK_DEPTH must be >= 0")
 	}
+	if len(c.TombstoneTags) == 0 {
+		return fmt.Errorf("TOMBSTONE_TAGS must contain at least one tag")
+	}
+	if c.TombstonePeriodLowScore <= 0 {
+		return fmt.Errorf("TOMBSTONE_PERIOD_LOW_SCORE must be greater than 0")
+	}
+	if c.TombstonePeriodTagBased <= 0 {
+		return fmt.Errorf("TOMBSTONE_PERIOD_TAG_BASED must be greater than 0")
+	}
+	if c.TombstonePeriodManual <= 0 {
+		return fmt.Errorf("TOMBSTONE_PERIOD_MANUAL must be greater than 0")
+	}
 	return nil
 }
 
@@ -135,4 +160,21 @@ func getEnvAsBool(key string, defaultValue bool) bool {
 		return defaultValue
 	}
 	return value
+}
+
+func getEnvAsStringSlice(key string, defaultValue []string) []string {
+	valueStr := os.Getenv(key)
+	if valueStr == "" {
+		return defaultValue
+	}
+	// Split by comma and trim spaces
+	parts := strings.Split(valueStr, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
 }

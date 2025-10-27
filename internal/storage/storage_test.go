@@ -10,7 +10,7 @@ func TestNew(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_new")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -25,7 +25,7 @@ func TestSaveAndGetRequest(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_save_get")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestSaveTextRequest(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_text_request")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestSearchByTags(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_search_tags")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestListRequests(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_list_requests")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestGetRequestNotFound(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_not_found")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestUpdateRequestMetadata(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_update_metadata")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -325,7 +325,7 @@ func TestUpdateRequestMetadataNotFound(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_update_metadata_notfound")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -347,7 +347,7 @@ func TestDeleteRequest(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_delete_request")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -400,7 +400,7 @@ func TestDeleteRequestNotFound(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_delete_notfound")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestGetTimelineExtents(t *testing.T) {
 		connStr, cleanup := setupTestDB(t, "test_timeline_extents_empty")
 		defer cleanup()
 
-		store, err := New(connStr)
+		store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -440,7 +440,7 @@ func TestGetTimelineExtents(t *testing.T) {
 		connStr, cleanup := setupTestDB(t, "test_timeline_extents_single")
 		defer cleanup()
 
-		store, err := New(connStr)
+		store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -490,7 +490,7 @@ func TestGetTimelineExtents(t *testing.T) {
 		connStr, cleanup := setupTestDB(t, "test_timeline_extents_multiple")
 		defer cleanup()
 
-		store, err := New(connStr)
+		store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -547,7 +547,7 @@ func TestGetTimelineExtents(t *testing.T) {
 		connStr, cleanup := setupTestDB(t, "test_timeline_extents_precedence")
 		defer cleanup()
 
-		store, err := New(connStr)
+		store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -601,7 +601,7 @@ func TestGetTimelineExtents(t *testing.T) {
 		connStr, cleanup := setupTestDB(t, "test_timeline_extents_fallback")
 		defer cleanup()
 
-		store, err := New(connStr)
+		store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -649,7 +649,7 @@ func TestGetTimelineExtents(t *testing.T) {
 		connStr, cleanup := setupTestDB(t, "test_timeline_extents_created_at")
 		defer cleanup()
 
-		store, err := New(connStr)
+		store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -693,7 +693,7 @@ func TestGetTimelineExtents(t *testing.T) {
 		connStr, cleanup := setupTestDB(t, "test_timeline_extents_mixed")
 		defer cleanup()
 
-		store, err := New(connStr)
+		store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -778,7 +778,7 @@ func TestUpdateSEOEnabled(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_update_seo")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -846,7 +846,7 @@ func TestUpdateSEOEnabledNotFound(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_update_seo_notfound")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -865,7 +865,7 @@ func TestGetRequestBySlug(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_get_by_slug")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -930,7 +930,7 @@ func TestSlugUniqueness(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_slug_uniqueness")
 	defer cleanup()
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}

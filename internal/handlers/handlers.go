@@ -23,17 +23,19 @@ import (
 
 // Handler contains all HTTP handlers
 type Handler struct {
-	storage            *storage.Storage
-	scraper            *clients.ScraperClient
-	textAnalyzer       *clients.TextAnalyzerClient
-	scheduler          *clients.SchedulerClient
-	linkScoreThreshold float64
-	scrapeRequests     *scraper_requests.Manager // TODO: Remove after text analysis queue is implemented
-	queueClient        *queue.Client
-	urlCache           URLCache
-	webInterfaceURL    string
-	scraperBaseURL     string
-	businessMetrics    *metrics.BusinessMetrics
+	storage                 *storage.Storage
+	scraper                 *clients.ScraperClient
+	textAnalyzer            *clients.TextAnalyzerClient
+	scheduler               *clients.SchedulerClient
+	linkScoreThreshold      float64
+	scrapeRequests          *scraper_requests.Manager // TODO: Remove after text analysis queue is implemented
+	queueClient             *queue.Client
+	urlCache                URLCache
+	webInterfaceURL         string
+	scraperBaseURL          string
+	businessMetrics         *metrics.BusinessMetrics
+	tombstonePeriodLowScore int // Days until deletion for low-score URLs
+	tombstonePeriodManual   int // Days until deletion for manual tombstones
 }
 
 // URLCache defines the interface for URL caching
@@ -43,29 +45,40 @@ type URLCache interface {
 	Delete(ctx context.Context, url string) error
 }
 
-// New creates a new Handler
-func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, queueClient *queue.Client, urlCache URLCache, linkScoreThreshold float64, webInterfaceURL string, scraperBaseURL string) *Handler {
+// New creates a new Handler (deprecated, use NewWithMetrics instead)
+func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, queueClient *queue.Client, urlCache URLCache, linkScoreThreshold float64, webInterfaceURL string, scraperBaseURL string, tombstonePeriodLowScore, tombstonePeriodManual int) *Handler {
 	// Initialize business metrics
 	businessMetrics := metrics.NewBusinessMetrics("controller")
+	return NewWithMetrics(store, scraper, textAnalyzer, scheduler, queueClient, urlCache, linkScoreThreshold, webInterfaceURL, scraperBaseURL, tombstonePeriodLowScore, tombstonePeriodManual, businessMetrics)
+}
 
+// NewWithMetrics creates a new Handler with provided business metrics
+func NewWithMetrics(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, queueClient *queue.Client, urlCache URLCache, linkScoreThreshold float64, webInterfaceURL string, scraperBaseURL string, tombstonePeriodLowScore, tombstonePeriodManual int, businessMetrics *metrics.BusinessMetrics) *Handler {
 	h := &Handler{
-		storage:            store,
-		scraper:            scraper,
-		textAnalyzer:       textAnalyzer,
-		scheduler:          scheduler,
-		linkScoreThreshold: linkScoreThreshold,
-		scrapeRequests:     scraper_requests.NewManager(), // TODO: Remove after text analysis queue is implemented
-		queueClient:        queueClient,
-		urlCache:           urlCache,
-		webInterfaceURL:    webInterfaceURL,
-		scraperBaseURL:     scraperBaseURL,
-		businessMetrics:    businessMetrics,
+		storage:                 store,
+		scraper:                 scraper,
+		textAnalyzer:            textAnalyzer,
+		scheduler:               scheduler,
+		linkScoreThreshold:      linkScoreThreshold,
+		scrapeRequests:          scraper_requests.NewManager(), // TODO: Remove after text analysis queue is implemented
+		queueClient:             queueClient,
+		urlCache:                urlCache,
+		webInterfaceURL:         webInterfaceURL,
+		scraperBaseURL:          scraperBaseURL,
+		businessMetrics:         businessMetrics,
+		tombstonePeriodLowScore: tombstonePeriodLowScore,
+		tombstonePeriodManual:   tombstonePeriodManual,
 	}
 
 	// Start periodic metrics updater for gauges
 	go h.startMetricsUpdater()
 
 	return h
+}
+
+// GetBusinessMetrics returns the business metrics instance
+func (h *Handler) GetBusinessMetrics() *metrics.BusinessMetrics {
+	return h.businessMetrics
 }
 
 // startMetricsUpdater periodically updates gauge metrics
@@ -187,7 +200,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 	// Check if score meets threshold (skip for image URLs)
 	if !isImageURL && scoreResp.Score.Score < h.linkScoreThreshold {
 		// Score is below threshold - mark for tombstoning and return scoring metadata only
-		tombstoneTime := time.Now().UTC().Add(30 * 24 * time.Hour) // Tombstone in 30 days
+		tombstoneTime := time.Now().UTC().Add(time.Duration(h.tombstonePeriodLowScore) * 24 * time.Hour)
 
 		// Add domain name to tags
 		tags := scoreResp.Score.Categories
@@ -223,6 +236,17 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 			respondError(w, fmt.Sprintf("Failed to save request: %v", err), http.StatusInternalServerError)
 			return
 		}
+
+		// Record tombstone metrics
+		h.businessMetrics.TombstonesCreatedTotal.WithLabelValues("low-score", "none").Inc()
+		h.businessMetrics.TombstoneDaysHistogram.WithLabelValues("low-score").Observe(float64(h.tombstonePeriodLowScore))
+		slog.Info("tombstone created",
+			"reason", "low-score",
+			"url", req.URL,
+			"score", scoreResp.Score.Score,
+			"threshold", h.linkScoreThreshold,
+			"period_days", h.tombstonePeriodLowScore,
+		)
 
 		response := ControllerResponse{
 			ID:            record.ID,
@@ -787,11 +811,11 @@ func (h *Handler) TombstoneRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Add tombstone_datetime to metadata (90 days from now)
+	// Add tombstone_datetime to metadata (configurable days from now)
 	if record.Metadata == nil {
 		record.Metadata = make(map[string]interface{})
 	}
-	tombstoneTime := time.Now().UTC().Add(90 * 24 * time.Hour) // 90 days
+	tombstoneTime := time.Now().UTC().Add(time.Duration(h.tombstonePeriodManual) * 24 * time.Hour)
 	record.Metadata["tombstone_datetime"] = tombstoneTime.Format(time.RFC3339)
 
 	// Update the request in storage
@@ -799,6 +823,15 @@ func (h *Handler) TombstoneRequest(w http.ResponseWriter, r *http.Request) {
 		respondError(w, fmt.Sprintf("Failed to update request: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	// Record tombstone metrics
+	h.businessMetrics.TombstonesCreatedTotal.WithLabelValues("manual", "none").Inc()
+	h.businessMetrics.TombstoneDaysHistogram.WithLabelValues("manual").Observe(float64(h.tombstonePeriodManual))
+	slog.Info("tombstone created",
+		"reason", "manual",
+		"request_id", id,
+		"period_days", h.tombstonePeriodManual,
+	)
 
 	respondJSON(w, map[string]string{"message": "Request tombstoned successfully"}, http.StatusOK)
 }

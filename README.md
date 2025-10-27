@@ -79,6 +79,18 @@ export DATABASE_PATH=./controller.db
 - `DB_PASSWORD` - Database password
 - `DB_NAME` - Database name (default: docutab)
 
+### Tombstone Configuration
+
+- **`TOMBSTONE_TAGS`** - Comma-separated list of tags that trigger auto-tombstoning (default: `low-quality,sparse-content`)
+- **`TOMBSTONE_PERIOD_LOW_SCORE`** - Days until deletion for low-score URLs (default: 30)
+- **`TOMBSTONE_PERIOD_TAG_BASED`** - Days until deletion for tagged content (default: 90)
+- **`TOMBSTONE_PERIOD_MANUAL`** - Days until deletion for manual tombstones (default: 90)
+
+The tombstone system automatically marks low-quality content for deletion:
+- **Low-score rejection**: URLs scored below `LINK_SCORE_THRESHOLD` are tombstoned immediately
+- **Tag-based tombstoning**: Content tagged with any tag in `TOMBSTONE_TAGS` is tombstoned when tags are updated
+- **Manual tombstoning**: Content manually marked via API endpoints
+
 ## Quick Examples
 
 ```bash

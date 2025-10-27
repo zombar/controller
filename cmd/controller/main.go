@@ -75,13 +75,27 @@ func main() {
 	dbConnStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
 		cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName)
 
-	// Initialize storage
-	store, err := storage.New(dbConnStr)
+	// Initialize storage with tombstone configuration
+	store, err := storage.New(
+		dbConnStr,
+		cfg.TombstoneTags,
+		cfg.TombstonePeriodLowScore,
+		cfg.TombstonePeriodTagBased,
+		cfg.TombstonePeriodManual,
+	)
 	if err != nil {
 		logger.Error("failed to initialize storage", "error", err)
 		os.Exit(1)
 	}
 	defer store.Close()
+
+	// Initialize business metrics (needed before handler and storage metrics adapter)
+	businessMetrics := metrics.NewBusinessMetrics("controller")
+
+	// Set up metrics adapter for storage layer
+	metricsAdapter := storage.NewMetricsAdapter(businessMetrics)
+	store.SetBusinessMetrics(metricsAdapter)
+	logger.Info("storage metrics initialized")
 
 	// Initialize database metrics
 	dbMetrics := metrics.NewDatabaseMetrics("controller")
@@ -119,19 +133,37 @@ func main() {
 	defer urlCache.Close()
 	logger.Info("URL cache initialized", "redis_addr", cfg.RedisAddr, "ttl", "30 days")
 
-	// Initialize queue worker
+	// Initialize handlers with tombstone configuration and business metrics
+	handler := handlers.NewWithMetrics(
+		store,
+		scraperClient,
+		textAnalyzerClient,
+		schedulerClient,
+		queueClient,
+		urlCache,
+		cfg.LinkScoreThreshold,
+		cfg.WebInterfaceURL,
+		cfg.ScraperBaseURL,
+		cfg.TombstonePeriodLowScore,
+		cfg.TombstonePeriodManual,
+		businessMetrics,
+	)
+
+	// Initialize queue worker with tombstone configuration
 	worker := queue.NewWorker(
 		queue.WorkerConfig{
-			RedisAddr:          cfg.RedisAddr,
-			Concurrency:        cfg.WorkerConcurrency,
-			LinkScoreThreshold: cfg.LinkScoreThreshold,
-			MaxLinkDepth:       cfg.MaxLinkDepth,
+			RedisAddr:               cfg.RedisAddr,
+			Concurrency:             cfg.WorkerConcurrency,
+			LinkScoreThreshold:      cfg.LinkScoreThreshold,
+			MaxLinkDepth:            cfg.MaxLinkDepth,
+			TombstonePeriodLowScore: cfg.TombstonePeriodLowScore,
 		},
 		store,
 		scraperClient,
 		textAnalyzerClient,
 		queueClient,
 		urlCache,
+		handler.GetBusinessMetrics(), // Pass business metrics to worker
 	)
 	logger.Info("queue worker initialized", "concurrency", cfg.WorkerConcurrency, "max_link_depth", cfg.MaxLinkDepth)
 
@@ -143,9 +175,6 @@ func main() {
 			os.Exit(1)
 		}
 	}()
-
-	// Initialize handlers
-	handler := handlers.New(store, scraperClient, textAnalyzerClient, schedulerClient, queueClient, urlCache, cfg.LinkScoreThreshold, cfg.WebInterfaceURL, cfg.ScraperBaseURL)
 
 	// Setup routes
 	mux := http.NewServeMux()

@@ -149,7 +149,7 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 	// Check score threshold (skip for image URLs)
 	if !isImageURL && scoreResp.Score.Score < w.linkScoreThreshold {
 		// Save a tombstoned record for low-quality content
-		tombstoneTime := time.Now().UTC().Add(30 * 24 * time.Hour) // Tombstone in 30 days
+		tombstoneTime := time.Now().UTC().Add(time.Duration(w.tombstonePeriodLowScore) * 24 * time.Hour)
 		requestID := uuid.New().String()
 
 		// Add domain name to tags, normalizing categories
@@ -192,6 +192,12 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 		// Update job with result
 		if err := w.storage.UpdateScrapeJobResult(jobID, requestID); err != nil {
 			return fmt.Errorf("failed to update job result: %w", err)
+		}
+
+		// Record tombstone metrics
+		if w.businessMetrics != nil {
+			w.businessMetrics.TombstonesCreatedTotal.WithLabelValues("low-score", "none").Inc()
+			w.businessMetrics.TombstoneDaysHistogram.WithLabelValues("low-score").Observe(float64(w.tombstonePeriodLowScore))
 		}
 
 		log.Printf("Low-quality URL marked for tombstoning: %s (score: %.2f, threshold: %.2f)",

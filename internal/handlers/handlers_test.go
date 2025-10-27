@@ -184,7 +184,8 @@ func setupTestHandler(t *testing.T) (*Handler, *httptest.Server, *httptest.Serve
 	// Create a unique database file for each test to avoid interference
 	connStr, dbCleanup := setupTestDB(t, strings.ReplaceAll(t.Name(), "/", "_"))
 
-	store, err := storage.New(connStr)
+	// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	store, err := storage.New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -1326,7 +1327,8 @@ func TestTombstoneRequest(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_tombstone_request")
 	defer cleanup()
 
-	store, err := storage.New(connStr)
+	// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	store, err := storage.New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -1404,7 +1406,8 @@ func TestTombstoneRequestNotFound(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_tombstone_notfound")
 	defer cleanup()
 
-	store, err := storage.New(connStr)
+	// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	store, err := storage.New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -1440,7 +1443,8 @@ func TestUntombstoneRequest(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_untombstone_request")
 	defer cleanup()
 
-	store, err := storage.New(connStr)
+	// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	store, err := storage.New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -1502,7 +1506,8 @@ func TestDeleteRequest(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_delete_request")
 	defer cleanup()
 
-	store, err := storage.New(connStr)
+	// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	store, err := storage.New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -1560,7 +1565,8 @@ func TestDeleteRequestNotFound(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "test_delete_notfound")
 	defer cleanup()
 
-	store, err := storage.New(connStr)
+	// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	store, err := storage.New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -1630,7 +1636,8 @@ func TestGetTimelineExtents(t *testing.T) {
 		connStr, cleanup := setupTestDB(t, "test_timeline_extents_handler")
 		defer cleanup()
 
-		store, err := storage.New(connStr)
+		// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	store, err := storage.New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}

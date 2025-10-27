@@ -26,7 +26,8 @@ func TestUpdateRequestTags_AutoTombstone_LowQuality(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "tombstone_lowquality")
 	defer cleanup()
 
-	storage, err := New(connStr)
+	// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	storage, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -106,7 +107,8 @@ func TestUpdateRequestTags_AutoTombstone_SparseContent(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "tombstone_sparse")
 	defer cleanup()
 
-	storage, err := New(connStr)
+	// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	storage, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -161,7 +163,8 @@ func TestUpdateRequestTags_AutoTombstone_BothTags(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "tombstone_both")
 	defer cleanup()
 
-	storage, err := New(connStr)
+	// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	storage, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -214,7 +217,8 @@ func TestUpdateRequestTags_NoAutoTombstone_NormalTags(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "tombstone_normal")
 	defer cleanup()
 
-	storage, err := New(connStr)
+	// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	storage, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -256,7 +260,8 @@ func TestUpdateRequestTags_PreservesExistingMetadata(t *testing.T) {
 	connStr, cleanup := setupTestDB(t, "tombstone_preserve")
 	defer cleanup()
 
-	storage, err := New(connStr)
+	// Use default test values: tags=[low-quality,sparse-content], periods=[30,90,90]
+	storage, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}

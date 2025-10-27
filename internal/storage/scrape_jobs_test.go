@@ -12,7 +12,7 @@ func setupTestStorage(t *testing.T) (*Storage, func()) {
 	testName := fmt.Sprintf("scrape_jobs_%d", time.Now().UnixNano())
 	connStr, dbCleanup := setupTestDB(t, testName)
 
-	store, err := New(connStr)
+	store, err := New(connStr, []string{"low-quality", "sparse-content"}, 30, 90, 90)
 	if err != nil {
 		t.Fatalf("Failed to create test storage: %v", err)
 	}

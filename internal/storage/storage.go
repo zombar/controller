@@ -15,7 +15,22 @@ import (
 
 // Storage handles all database operations
 type Storage struct {
-	db *sql.DB
+	db                      *sql.DB
+	tombstoneTags           []string // Tags that trigger auto-tombstone
+	tombstonePeriodLowScore int      // Days until deletion for low-score URLs
+	tombstonePeriodTagBased int      // Days until deletion for tagged content
+	tombstonePeriodManual   int      // Days until deletion for manual tombstones
+	businessMetrics         BusinessMetrics // Optional metrics interface
+}
+
+// BusinessMetrics defines the interface for recording tombstone metrics
+type BusinessMetrics interface {
+	RecordTombstone(reason, tag string, periodDays int)
+}
+
+// SetBusinessMetrics sets the business metrics instance (optional)
+func (s *Storage) SetBusinessMetrics(m BusinessMetrics) {
+	s.businessMetrics = m
 }
 
 // Request represents a controller request record
@@ -100,7 +115,7 @@ func extractEffectiveDate(metadata map[string]interface{}, fallback time.Time) t
 }
 
 // New creates a new Storage instance with PostgreSQL and runs migrations
-func New(connStr string) (*Storage, error) {
+func New(connStr string, tombstoneTags []string, tombstonePeriodLowScore, tombstonePeriodTagBased, tombstonePeriodManual int) (*Storage, error) {
 	log.Printf("Opening PostgreSQL database connection")
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
@@ -126,7 +141,13 @@ func New(connStr string) (*Storage, error) {
 	}
 
 	log.Println("Database initialization complete")
-	return &Storage{db: db}, nil
+	return &Storage{
+		db:                      db,
+		tombstoneTags:           tombstoneTags,
+		tombstonePeriodLowScore: tombstonePeriodLowScore,
+		tombstonePeriodTagBased: tombstonePeriodTagBased,
+		tombstonePeriodManual:   tombstonePeriodManual,
+	}, nil
 }
 
 // Close closes the database connection
@@ -860,16 +881,23 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 		}
 	}
 
-	// Check if tags contain 'low-quality' or 'sparse-content' and apply 90-day tombstone
-	hasLowQuality := false
+	// Check if tags contain any tombstone trigger tags and apply tag-based tombstone
+	hasTombstoneTag := false
+	matchedTag := ""
 	for _, tag := range tags {
-		if tag == "low-quality" || tag == "sparse-content" {
-			hasLowQuality = true
+		for _, tombstoneTag := range s.tombstoneTags {
+			if tag == tombstoneTag {
+				hasTombstoneTag = true
+				matchedTag = tag
+				break
+			}
+		}
+		if hasTombstoneTag {
 			break
 		}
 	}
 
-	if hasLowQuality {
+	if hasTombstoneTag {
 		// Fetch current metadata
 		var metadataJSON string
 		err := tx.QueryRow("SELECT metadata_json FROM requests WHERE id = $1", id).Scan(&metadataJSON)
@@ -882,10 +910,16 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 			return fmt.Errorf("failed to unmarshal metadata: %w", err)
 		}
 
-		// Add 90-day tombstone
-		tombstoneTime := time.Now().UTC().Add(90 * 24 * time.Hour)
+		// Add tag-based tombstone using configured period
+		tombstoneTime := time.Now().UTC().Add(time.Duration(s.tombstonePeriodTagBased) * 24 * time.Hour)
 		metadata["tombstone_datetime"] = tombstoneTime.Format(time.RFC3339)
-		metadata["tombstone_reason"] = "auto-tombstone: low-quality or sparse-content tag"
+		metadata["tombstone_reason"] = fmt.Sprintf("auto-tombstone: %s tag", matchedTag)
+
+		// Record metrics if available
+		if s.businessMetrics != nil {
+			s.businessMetrics.RecordTombstone("tag-based", matchedTag, s.tombstonePeriodTagBased)
+		}
+		log.Printf("Tag-based tombstone created: request_id=%s, tag=%s, period_days=%d", id, matchedTag, s.tombstonePeriodTagBased)
 
 		// Marshal updated metadata
 		updatedMetadataJSON, err := json.Marshal(metadata)
