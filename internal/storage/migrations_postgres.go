@@ -3,7 +3,7 @@ package storage
 import (
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 )
 
 // PostgreSQL-specific migrations
@@ -157,7 +157,7 @@ var postgresMigrations = []Migration{
 
 // RunPostgresMigrations executes all pending PostgreSQL migrations
 func RunPostgresMigrations(db *sql.DB) error {
-	log.Println("Creating controller_schema_version table...")
+	slog.Default().Info("creating controller_schema_version table")
 	// Create controller_schema_version table if it doesn't exist
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS controller_schema_version (
@@ -169,23 +169,23 @@ func RunPostgresMigrations(db *sql.DB) error {
 		return fmt.Errorf("failed to create controller_schema_version table: %w", err)
 	}
 
-	log.Println("Checking current schema version...")
+	slog.Default().Info("checking current schema version")
 	// Get current version
 	var currentVersion int
 	err = db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM controller_schema_version").Scan(&currentVersion)
 	if err != nil {
 		return fmt.Errorf("failed to get current schema version: %w", err)
 	}
-	log.Printf("Current schema version: %d", currentVersion)
+	slog.Default().Info("current schema version", "version", currentVersion)
 
 	// Apply pending migrations
 	for _, migration := range postgresMigrations {
 		if migration.Version <= currentVersion {
-			log.Printf("Skipping migration %d (already applied)", migration.Version)
+			slog.Default().Debug("skipping migration (already applied)", "version", migration.Version)
 			continue
 		}
 
-		log.Printf("Applying migration %d: %s", migration.Version, migration.Name)
+		slog.Default().Info("applying migration", "version", migration.Version, "name", migration.Name)
 		tx, err := db.Begin()
 		if err != nil {
 			return fmt.Errorf("failed to begin transaction for migration %d: %w", migration.Version, err)
@@ -209,9 +209,9 @@ func RunPostgresMigrations(db *sql.DB) error {
 			return fmt.Errorf("failed to commit migration %d: %w", migration.Version, err)
 		}
 
-		log.Printf("✓ Applied migration %d: %s", migration.Version, migration.Name)
+		slog.Default().Info("migration applied successfully", "version", migration.Version, "name", migration.Name)
 	}
 
-	log.Println("All migrations complete")
+	slog.Default().Info("all migrations complete")
 	return nil
 }

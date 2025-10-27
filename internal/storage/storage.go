@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"math/rand"
 	"strings"
 	"time"
@@ -116,7 +116,7 @@ func extractEffectiveDate(metadata map[string]interface{}, fallback time.Time) t
 
 // New creates a new Storage instance with PostgreSQL and runs migrations
 func New(connStr string, tombstoneTags []string, tombstonePeriodLowScore, tombstonePeriodTagBased, tombstonePeriodManual int) (*Storage, error) {
-	log.Printf("Opening PostgreSQL database connection")
+	slog.Default().Info("opening postgresql database connection")
 	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
@@ -127,20 +127,20 @@ func New(connStr string, tombstoneTags []string, tombstonePeriodLowScore, tombst
 	db.SetMaxIdleConns(5)
 	db.SetConnMaxLifetime(5 * time.Minute)
 
-	log.Println("Testing database connection...")
+	slog.Default().Info("testing database connection")
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	log.Println("Running migrations...")
+	slog.Default().Info("running migrations")
 	// Run migrations
 	if err := RunPostgresMigrations(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
 
-	log.Println("Database initialization complete")
+	slog.Default().Info("database initialization complete")
 	return &Storage{
 		db:                      db,
 		tombstoneTags:           tombstoneTags,
@@ -609,7 +609,7 @@ func (s *Storage) GetTimelineExtents() (*time.Time, error) {
 
 // GenerateMockData generates 6 months of realistic historical data for testing
 func (s *Storage) GenerateMockData() error {
-	log.Println("Generating mock historical data...")
+	slog.Default().Info("generating mock historical data")
 
 	// Check if we already have data
 	var count int
@@ -619,7 +619,7 @@ func (s *Storage) GenerateMockData() error {
 	}
 
 	if count > 0 {
-		log.Printf("Database already contains %d requests, skipping mock data generation", count)
+		slog.Default().Info("database already contains requests, skipping mock data generation", "count", count)
 		return nil
 	}
 
@@ -779,7 +779,7 @@ func (s *Storage) GenerateMockData() error {
 		}
 	}
 
-	log.Printf("✓ Generated %d mock requests spanning %.0f days (6 months)", mockCount, daysToGenerate)
+	slog.Default().Info("generated mock requests", "count", mockCount, "days", int(daysToGenerate), "period", "6 months")
 	return nil
 }
 
@@ -928,7 +928,7 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 		if s.businessMetrics != nil {
 			s.businessMetrics.RecordTombstone("tag-based", matchedTag, s.tombstonePeriodTagBased)
 		}
-		log.Printf("Tag-based tombstone created: request_id=%s, tag=%s, period_days=%d", id, matchedTag, s.tombstonePeriodTagBased)
+		slog.Default().Info("tag-based tombstone created", "request_id", id, "tag", matchedTag, "period_days", s.tombstonePeriodTagBased)
 
 		// Marshal updated metadata
 		updatedMetadataJSON, err := json.Marshal(metadata)

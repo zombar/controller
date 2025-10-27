@@ -2,7 +2,7 @@ package handlers
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -27,7 +27,7 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 	// Get request by slug
 	request, err := h.storage.GetRequestBySlug(slug)
 	if err != nil {
-		log.Printf("Error getting request by slug %s: %v", slug, err)
+		slog.Default().Error("error getting request by slug", "slug", slug, "error", err)
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
@@ -39,7 +39,7 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 
 	// Check if SEO is enabled for this document
 	if !request.SEOEnabled {
-		log.Printf("SEO disabled for request %s (slug: %s)", request.ID, slug)
+		slog.Default().Debug("seo disabled for request", "request_id", request.ID, "slug", slug)
 		http.Error(w, "SEO page not available for this content", http.StatusNotFound)
 		return
 	}
@@ -57,7 +57,7 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 	// Get author and validate it's not a URL
 	author := getString(scraperMeta, "author", "")
 	if isURL(author) {
-		log.Printf("Author field contains URL, clearing it: %s", author)
+		slog.Default().Warn("author field contains url, clearing it", "author", author)
 		author = ""
 	}
 
@@ -71,9 +71,9 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 	// Select best thumbnail based on relevance score
 	var ogImage string
 	var bestImageSlug string
-	log.Printf("DEBUG: Processing images for slug %s, scraperBaseURL=%s", slug, h.scraperBaseURL)
+	slog.Default().Debug("processing images for slug", "slug", slug, "scraper_base_url", h.scraperBaseURL)
 	if images, ok := scraperMeta["images"].([]interface{}); ok && len(images) > 0 {
-		log.Printf("DEBUG: Found %d images in metadata", len(images))
+		slog.Default().Debug("found images in metadata", "count", len(images))
 		// Find image with highest relevance score
 		var bestScore float64 = -1
 		for _, imgInterface := range images {
@@ -99,17 +99,17 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 		// Use best scored image as OG image (served by scraper service)
 		if bestImageSlug != "" {
 			ogImage = fmt.Sprintf("%s/images/%s", h.scraperBaseURL, bestImageSlug)
-			log.Printf("Selected thumbnail %s with relevance score %.2f, URL: %s", bestImageSlug, bestScore, ogImage)
+			slog.Default().Info("selected thumbnail", "image_slug", bestImageSlug, "relevance_score", bestScore, "url", ogImage)
 
 			// Insert image midway through content (use scraper service URL)
-			log.Printf("DEBUG: Inserting image into content with baseURL=%s, slug=%s", h.scraperBaseURL, bestImageSlug)
+			slog.Default().Debug("inserting image into content", "base_url", h.scraperBaseURL, "image_slug", bestImageSlug)
 			content = insertImageInContent(content, h.scraperBaseURL, bestImageSlug)
-			log.Printf("DEBUG: Content length after image insertion: %d", len(content))
+			slog.Default().Debug("content length after image insertion", "length", len(content))
 		} else {
-			log.Printf("DEBUG: No bestImageSlug found")
+			slog.Default().Debug("no best image slug found")
 		}
 	} else {
-		log.Printf("DEBUG: No images found in scraper metadata")
+		slog.Default().Debug("no images found in scraper metadata")
 	}
 
 	// Generate JSON-LD schema
@@ -130,7 +130,7 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 
 	jsonLD, err := seo.GenerateArticleSchema(schemaData)
 	if err != nil {
-		log.Printf("Error generating schema: %v", err)
+		slog.Default().Error("error generating schema", "error", err)
 		jsonLD = ""
 	}
 
@@ -161,7 +161,7 @@ func (h *Handler) ServeContent(w http.ResponseWriter, r *http.Request) {
 
 	html, err := templates.RenderContentPage(pageData)
 	if err != nil {
-		log.Printf("Error rendering template: %v", err)
+		slog.Default().Error("error rendering template", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -184,7 +184,7 @@ func (h *Handler) ServeSitemap(w http.ResponseWriter, r *http.Request) {
 	// Get all requests with slugs
 	requests, err := h.storage.ListRequests(1000, 0) // Get up to 1000 entries
 	if err != nil {
-		log.Printf("Error listing requests for sitemap: %v", err)
+		slog.Default().Error("error listing requests for sitemap", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -210,7 +210,7 @@ func (h *Handler) ServeSitemap(w http.ResponseWriter, r *http.Request) {
 	baseURL := getBaseURL(r)
 	xmlData, err := seo.GenerateSitemap(baseURL, entries)
 	if err != nil {
-		log.Printf("Error generating sitemap: %v", err)
+		slog.Default().Error("error generating sitemap", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -244,7 +244,7 @@ func (h *Handler) ServeImageSitemap(w http.ResponseWriter, r *http.Request) {
 	baseURL := getBaseURL(r)
 	xmlData, err := seo.GenerateImageSitemap(baseURL, entries)
 	if err != nil {
-		log.Printf("Error generating image sitemap: %v", err)
+		slog.Default().Error("error generating image sitemap", "error", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
