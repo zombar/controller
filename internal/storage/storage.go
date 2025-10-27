@@ -498,7 +498,7 @@ func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
 		FROM requests
 		ORDER BY effective_date DESC
-		LIMIT ? OFFSET ?
+		LIMIT $1 OFFSET $2
 	`
 
 	rows, err := s.db.Query(query, limit, offset)

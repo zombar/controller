@@ -32,7 +32,7 @@ func (s *Storage) SaveScrapeJob(job *ScrapeJob) error {
 			created_at, updated_at, completed_at,
 			error_message, result_request_id, asynq_task_id,
 			parent_job_id, depth
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 	`
 
 	_, err := s.db.Exec(
@@ -68,7 +68,7 @@ func (s *Storage) GetScrapeJob(id string) (*ScrapeJob, error) {
 			error_message, result_request_id, asynq_task_id,
 			parent_job_id, depth
 		FROM scrape_jobs
-		WHERE id = ?
+		WHERE id = $1
 	`
 
 	job := &ScrapeJob{}
@@ -133,7 +133,7 @@ func (s *Storage) ListScrapeJobs(limit, offset int) ([]*ScrapeJob, error) {
 		FROM scrape_jobs
 		WHERE parent_job_id IS NULL
 		ORDER BY created_at DESC
-		LIMIT ? OFFSET ?
+		LIMIT $1 OFFSET $2
 	`
 
 	rows, err := s.db.Query(query, limit, offset)
@@ -177,7 +177,7 @@ func (s *Storage) GetChildJobs(parentID string) ([]*ScrapeJob, error) {
 			error_message, result_request_id, asynq_task_id,
 			parent_job_id, depth
 		FROM scrape_jobs
-		WHERE parent_job_id = ?
+		WHERE parent_job_id = $1
 		ORDER BY created_at ASC
 	`
 
@@ -266,8 +266,8 @@ func (s *Storage) UpdateScrapeJobStatus(id, status string, errorMessage string) 
 
 	query := `
 		UPDATE scrape_jobs
-		SET status = ?, updated_at = ?, completed_at = ?, error_message = ?
-		WHERE id = ?
+		SET status = $1, updated_at = $2, completed_at = $3, error_message = $4
+		WHERE id = $5
 	`
 
 	result, err := s.db.Exec(query, status, now, completedAt, errorMessage, id)
@@ -292,8 +292,8 @@ func (s *Storage) UpdateScrapeJobResult(id string, resultRequestID string) error
 	now := time.Now()
 	query := `
 		UPDATE scrape_jobs
-		SET status = ?, result_request_id = ?, updated_at = ?, completed_at = ?
-		WHERE id = ?
+		SET status = $1, result_request_id = $2, updated_at = $3, completed_at = $4
+		WHERE id = $5
 	`
 
 	result, err := s.db.Exec(query, "completed", resultRequestID, now, now, id)
@@ -317,8 +317,8 @@ func (s *Storage) UpdateScrapeJobResult(id string, resultRequestID string) error
 func (s *Storage) UpdateScrapeJobTaskID(id string, taskID string) error {
 	query := `
 		UPDATE scrape_jobs
-		SET asynq_task_id = ?, updated_at = ?
-		WHERE id = ?
+		SET asynq_task_id = $1, updated_at = $2
+		WHERE id = $3
 	`
 
 	result, err := s.db.Exec(query, taskID, time.Now(), id)
@@ -342,8 +342,8 @@ func (s *Storage) UpdateScrapeJobTaskID(id string, taskID string) error {
 func (s *Storage) IncrementScrapeJobRetries(id string) error {
 	query := `
 		UPDATE scrape_jobs
-		SET retries = retries + 1, updated_at = ?
-		WHERE id = ?
+		SET retries = retries + 1, updated_at = $1
+		WHERE id = $2
 	`
 
 	result, err := s.db.Exec(query, time.Now(), id)
@@ -365,7 +365,7 @@ func (s *Storage) IncrementScrapeJobRetries(id string) error {
 
 // DeleteScrapeJob deletes a scrape job
 func (s *Storage) DeleteScrapeJob(id string) error {
-	query := `DELETE FROM scrape_jobs WHERE id = ?`
+	query := `DELETE FROM scrape_jobs WHERE id = $1`
 
 	result, err := s.db.Exec(query, id)
 	if err != nil {
@@ -386,7 +386,7 @@ func (s *Storage) DeleteScrapeJob(id string) error {
 
 // CountScrapeJobsByStatus counts jobs by status
 func (s *Storage) CountScrapeJobsByStatus(status string) (int, error) {
-	query := `SELECT COUNT(*) FROM scrape_jobs WHERE status = ?`
+	query := `SELECT COUNT(*) FROM scrape_jobs WHERE status = $1`
 
 	var count int
 	err := s.db.QueryRow(query, status).Scan(&count)
