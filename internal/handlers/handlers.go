@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -29,13 +30,21 @@ type Handler struct {
 	linkScoreThreshold float64
 	scrapeRequests     *scraper_requests.Manager // TODO: Remove after text analysis queue is implemented
 	queueClient        *queue.Client
+	urlCache           URLCache
 	webInterfaceURL    string
 	scraperBaseURL     string
 	businessMetrics    *metrics.BusinessMetrics
 }
 
+// URLCache defines the interface for URL caching
+type URLCache interface {
+	Get(ctx context.Context, url string) (string, error)
+	Set(ctx context.Context, url, scraperUUID string) error
+	Delete(ctx context.Context, url string) error
+}
+
 // New creates a new Handler
-func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, queueClient *queue.Client, linkScoreThreshold float64, webInterfaceURL string, scraperBaseURL string) *Handler {
+func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, queueClient *queue.Client, urlCache URLCache, linkScoreThreshold float64, webInterfaceURL string, scraperBaseURL string) *Handler {
 	// Initialize business metrics
 	businessMetrics := metrics.NewBusinessMetrics("controller")
 
@@ -47,6 +56,7 @@ func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *c
 		linkScoreThreshold: linkScoreThreshold,
 		scrapeRequests:     scraper_requests.NewManager(), // TODO: Remove after text analysis queue is implemented
 		queueClient:        queueClient,
+		urlCache:           urlCache,
 		webInterfaceURL:    webInterfaceURL,
 		scraperBaseURL:     scraperBaseURL,
 		businessMetrics:    businessMetrics,
@@ -1223,6 +1233,48 @@ func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Record scrape request received
 	h.businessMetrics.ScrapeRequestsTotal.WithLabelValues("accepted").Inc()
+
+	// Check cache for recently scraped URL
+	if h.urlCache != nil {
+		cachedScraperUUID, err := h.urlCache.Get(r.Context(), req.URL)
+		if err != nil {
+			slog.Warn("failed to check URL cache", "url", req.URL, "error", err)
+			// Continue with scraping even if cache check fails
+		} else if cachedScraperUUID != "" {
+			// Cache hit - URL was scraped recently (within 30 days)
+			slog.Info("cache hit for URL", "url", req.URL, "scraper_uuid", cachedScraperUUID)
+			h.businessMetrics.ScrapeRequestsTotal.WithLabelValues("cached").Inc()
+
+			// Fetch the existing scraped data
+			existingData, err := h.storage.GetRequest(cachedScraperUUID)
+			if err != nil {
+				slog.Warn("cached scraper UUID not found in storage, proceeding with fresh scrape",
+					"url", req.URL,
+					"scraper_uuid", cachedScraperUUID,
+					"error", err)
+				// Cache is stale, invalidate it and proceed with scraping
+				if delErr := h.urlCache.Delete(r.Context(), req.URL); delErr != nil {
+					slog.Warn("failed to delete stale cache entry", "url", req.URL, "error", delErr)
+				}
+			} else {
+				// Return the cached result
+				response := map[string]interface{}{
+					"id":         existingData.ID,
+					"status":     "completed",
+					"cached":     true,
+					"created_at": existingData.CreatedAt,
+				}
+				if existingData.SourceURL != nil {
+					response["url"] = *existingData.SourceURL
+				}
+				if existingData.ScraperUUID != nil {
+					response["scraper_uuid"] = *existingData.ScraperUUID
+				}
+				respondJSON(w, response, http.StatusOK)
+				return
+			}
+		}
+	}
 
 	// Create scrape job in database
 	jobID := uuid.New().String()

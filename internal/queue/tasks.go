@@ -345,6 +345,16 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 
 	log.Printf("Scrape job %s completed successfully, result saved as %s", jobID, requestID)
 
+	// Populate URL cache with scraper UUID for 30-day caching
+	if w.urlCache != nil && scrapeResp.ID != "" {
+		if err := w.urlCache.Set(ctx, url, scrapeResp.ID); err != nil {
+			// Log error but don't fail the task
+			w.logger.Warn("failed to populate URL cache", "url", url, "scraper_uuid", scrapeResp.ID, "error", err)
+		} else {
+			w.logger.Info("URL cached for 30 days", "url", url, "scraper_uuid", scrapeResp.ID)
+		}
+	}
+
 	// Extract links if requested (skip for image URLs)
 	if extractLinks && !isImageURL {
 		// Get current job to check depth

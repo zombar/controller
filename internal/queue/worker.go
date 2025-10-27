@@ -11,6 +11,13 @@ import (
 	"github.com/zombar/controller/internal/storage"
 )
 
+// URLCache defines the interface for URL caching
+type URLCache interface {
+	Get(ctx context.Context, url string) (string, error)
+	Set(ctx context.Context, url, scraperUUID string) error
+	Delete(ctx context.Context, url string) error
+}
+
 // Worker wraps the Asynq server for processing tasks
 type Worker struct {
 	server              *asynq.Server
@@ -23,6 +30,7 @@ type Worker struct {
 	logger              *slog.Logger
 	queueClient         *Client
 	maxLinkDepth        int
+	urlCache            URLCache
 }
 
 // WorkerConfig contains configuration for the queue worker
@@ -40,6 +48,7 @@ func NewWorker(
 	scraperClient *clients.ScraperClient,
 	textAnalyzerClient *clients.TextAnalyzerClient,
 	queueClient *Client,
+	urlCache URLCache,
 ) *Worker {
 	redisOpt := asynq.RedisClientOpt{
 		Addr: cfg.RedisAddr,
@@ -100,6 +109,7 @@ func NewWorker(
 		logger:              slog.Default(),
 		queueClient:         queueClient,
 		maxLinkDepth:        cfg.MaxLinkDepth,
+		urlCache:            urlCache,
 	}
 
 	// Register task handlers

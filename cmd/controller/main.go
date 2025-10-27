@@ -16,6 +16,7 @@ import (
 	"github.com/zombar/controller/internal/handlers"
 	"github.com/zombar/controller/internal/queue"
 	"github.com/zombar/controller/internal/storage"
+	"github.com/zombar/controller/internal/urlcache"
 	"github.com/zombar/controller/pkg/logging"
 	"github.com/zombar/purpletab/pkg/metrics"
 	"github.com/zombar/purpletab/pkg/tracing"
@@ -109,6 +110,11 @@ func main() {
 	defer queueClient.Close()
 	logger.Info("queue client initialized", "redis_addr", cfg.RedisAddr)
 
+	// Initialize URL cache for preventing duplicate scrapes
+	urlCache := urlcache.New(cfg.RedisAddr)
+	defer urlCache.Close()
+	logger.Info("URL cache initialized", "redis_addr", cfg.RedisAddr, "ttl", "30 days")
+
 	// Initialize queue worker
 	worker := queue.NewWorker(
 		queue.WorkerConfig{
@@ -121,6 +127,7 @@ func main() {
 		scraperClient,
 		textAnalyzerClient,
 		queueClient,
+		urlCache,
 	)
 	logger.Info("queue worker initialized", "concurrency", cfg.WorkerConcurrency, "max_link_depth", cfg.MaxLinkDepth)
 
@@ -134,7 +141,7 @@ func main() {
 	}()
 
 	// Initialize handlers
-	handler := handlers.New(store, scraperClient, textAnalyzerClient, schedulerClient, queueClient, cfg.LinkScoreThreshold, cfg.WebInterfaceURL, cfg.ScraperBaseURL)
+	handler := handlers.New(store, scraperClient, textAnalyzerClient, schedulerClient, queueClient, urlCache, cfg.LinkScoreThreshold, cfg.WebInterfaceURL, cfg.ScraperBaseURL)
 
 	// Setup routes
 	mux := http.NewServeMux()
