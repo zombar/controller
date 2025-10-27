@@ -21,7 +21,7 @@ var postgresMigrations = []Migration{
 		Version: 1,
 		Name:    "initial_schema",
 		SQL: `
-			CREATE TABLE IF NOT EXISTS schema_version (
+			CREATE TABLE IF NOT EXISTS controller_schema_version (
 				version INTEGER PRIMARY KEY,
 				applied_at TIMESTAMPTZ DEFAULT NOW()
 			);
@@ -157,22 +157,22 @@ var postgresMigrations = []Migration{
 
 // RunPostgresMigrations executes all pending PostgreSQL migrations
 func RunPostgresMigrations(db *sql.DB) error {
-	log.Println("Creating schema_version table...")
-	// Create schema_version table if it doesn't exist
+	log.Println("Creating controller_schema_version table...")
+	// Create controller_schema_version table if it doesn't exist
 	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS schema_version (
+		CREATE TABLE IF NOT EXISTS controller_schema_version (
 			version INTEGER PRIMARY KEY,
 			applied_at TIMESTAMPTZ DEFAULT NOW()
 		)
 	`)
 	if err != nil {
-		return fmt.Errorf("failed to create schema_version table: %w", err)
+		return fmt.Errorf("failed to create controller_schema_version table: %w", err)
 	}
 
 	log.Println("Checking current schema version...")
 	// Get current version
 	var currentVersion int
-	err = db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM schema_version").Scan(&currentVersion)
+	err = db.QueryRow("SELECT COALESCE(MAX(version), 0) FROM controller_schema_version").Scan(&currentVersion)
 	if err != nil {
 		return fmt.Errorf("failed to get current schema version: %w", err)
 	}
@@ -199,7 +199,7 @@ func RunPostgresMigrations(db *sql.DB) error {
 		}
 
 		// Record migration (use PostgreSQL $1 placeholder instead of ?)
-		_, err = tx.Exec("INSERT INTO schema_version (version) VALUES ($1)", migration.Version)
+		_, err = tx.Exec("INSERT INTO controller_schema_version (version) VALUES ($1)", migration.Version)
 		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("failed to record migration %d: %w", migration.Version, err)
