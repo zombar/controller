@@ -39,7 +39,7 @@ func (s *Storage) SaveScrapeJob(job *ScrapeJob) error {
 		query,
 		job.ID,
 		job.URL,
-		boolToInt(job.ExtractLinks),
+		job.ExtractLinks,
 		job.Status,
 		job.Retries,
 		job.CreatedAt,
@@ -72,7 +72,6 @@ func (s *Storage) GetScrapeJob(id string) (*ScrapeJob, error) {
 	`
 
 	job := &ScrapeJob{}
-	var extractLinks int
 	var completedAt sql.NullTime
 	var errorMessage sql.NullString
 	var resultRequestID sql.NullString
@@ -82,7 +81,7 @@ func (s *Storage) GetScrapeJob(id string) (*ScrapeJob, error) {
 	err := s.db.QueryRow(query, id).Scan(
 		&job.ID,
 		&job.URL,
-		&extractLinks,
+		&job.ExtractLinks,
 		&job.Status,
 		&job.Retries,
 		&job.CreatedAt,
@@ -101,8 +100,6 @@ func (s *Storage) GetScrapeJob(id string) (*ScrapeJob, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get scrape job: %w", err)
 	}
-
-	job.ExtractLinks = extractLinks != 0
 	if completedAt.Valid {
 		job.CompletedAt = &completedAt.Time
 	}
@@ -208,7 +205,6 @@ func (s *Storage) scanScrapeJob(row interface {
 	Scan(dest ...interface{}) error
 }) (*ScrapeJob, error) {
 	job := &ScrapeJob{}
-	var extractLinks int
 	var completedAt sql.NullTime
 	var errorMessage sql.NullString
 	var resultRequestID sql.NullString
@@ -218,7 +214,7 @@ func (s *Storage) scanScrapeJob(row interface {
 	err := row.Scan(
 		&job.ID,
 		&job.URL,
-		&extractLinks,
+		&job.ExtractLinks,
 		&job.Status,
 		&job.Retries,
 		&job.CreatedAt,
@@ -233,8 +229,6 @@ func (s *Storage) scanScrapeJob(row interface {
 	if err != nil {
 		return nil, fmt.Errorf("failed to scan scrape job: %w", err)
 	}
-
-	job.ExtractLinks = extractLinks != 0
 	if completedAt.Valid {
 		job.CompletedAt = &completedAt.Time
 	}
@@ -395,12 +389,4 @@ func (s *Storage) CountScrapeJobsByStatus(status string) (int, error) {
 	}
 
 	return count, nil
-}
-
-// boolToInt converts boolean to integer (for SQLite)
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }
