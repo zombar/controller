@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "modernc.org/sqlite"
+	_ "github.com/lib/pq"
 )
 
 // Storage handles all database operations
@@ -99,20 +99,18 @@ func extractEffectiveDate(metadata map[string]interface{}, fallback time.Time) t
 	return fallback
 }
 
-// New creates a new Storage instance and runs migrations
-func New(databasePath string) (*Storage, error) {
-	log.Printf("Opening database at: %s", databasePath)
-	// Add connection parameters for better concurrency handling
-	// WAL mode allows concurrent reads and writes
-	// Busy timeout prevents immediate failures on concurrent access
-	connStr := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL", databasePath)
-	db, err := sql.Open("sqlite", connStr)
+// New creates a new Storage instance with PostgreSQL and runs migrations
+func New(connStr string) (*Storage, error) {
+	log.Printf("Opening PostgreSQL database connection")
+	db, err := sql.Open("postgres", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
-	// Limit connection pool to 1 to prevent transaction conflicts
-	db.SetMaxOpenConns(1)
+	// Configure connection pool for PostgreSQL
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
 
 	log.Println("Testing database connection...")
 	if err := db.Ping(); err != nil {
@@ -120,16 +118,9 @@ func New(databasePath string) (*Storage, error) {
 		return nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	log.Println("Enabling foreign keys...")
-	// Enable foreign keys
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
-	}
-
 	log.Println("Running migrations...")
 	// Run migrations
-	if err := RunMigrations(db); err != nil {
+	if err := RunPostgresMigrations(db); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to run migrations: %w", err)
 	}
@@ -176,18 +167,17 @@ func (s *Storage) SaveRequest(req *Request) error {
 	defer tx.Rollback()
 
 	// Insert request record with effective_date, slug, and seo_enabled
-	// Format effective_date as RFC3339 string for consistent SQLite storage
 	_, err = tx.Exec(`
 		INSERT INTO requests (id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, req.ID, req.CreatedAt, req.EffectiveDate.Format(time.RFC3339), req.SourceType, req.SourceURL, req.ScraperUUID, req.TextAnalyzerUUID, string(tagsJSON), string(metadataJSON), req.Slug, req.SEOEnabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, req.ID, req.CreatedAt, req.EffectiveDate, req.SourceType, req.SourceURL, req.ScraperUUID, req.TextAnalyzerUUID, string(tagsJSON), string(metadataJSON), req.Slug, req.SEOEnabled)
 	if err != nil {
 		return fmt.Errorf("failed to insert request: %w", err)
 	}
 
 	// Insert individual tags for searching
 	if len(req.Tags) > 0 {
-		stmt, err := tx.Prepare("INSERT INTO tags (request_id, tag) VALUES (?, ?)")
+		stmt, err := tx.Prepare("INSERT INTO tags (request_id, tag) VALUES ($1, $2)")
 		if err != nil {
 			return fmt.Errorf("failed to prepare tag insert: %w", err)
 		}
@@ -215,7 +205,7 @@ func (s *Storage) GetRequest(id string) (*Request, error) {
 	err := s.db.QueryRow(`
 		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
 		FROM requests
-		WHERE id = ?
+		WHERE id = $1
 	`, id).Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON, &slug, &req.SEOEnabled)
 
 	// Parse effective_date from string
@@ -264,13 +254,13 @@ func (s *Storage) DeleteRequest(id string) error {
 	defer tx.Rollback()
 
 	// Delete associated tags first (due to foreign key constraint)
-	_, err = tx.Exec("DELETE FROM tags WHERE request_id = ?", id)
+	_, err = tx.Exec("DELETE FROM tags WHERE request_id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete tags: %w", err)
 	}
 
 	// Delete the request
-	result, err := tx.Exec("DELETE FROM requests WHERE id = ?", id)
+	result, err := tx.Exec("DELETE FROM requests WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete request: %w", err)
 	}
@@ -300,8 +290,8 @@ func (s *Storage) UpdateRequestMetadata(id string, metadata map[string]interface
 
 	result, err := s.db.Exec(`
 		UPDATE requests
-		SET metadata_json = ?
-		WHERE id = ?
+		SET metadata_json = $1
+		WHERE id = $2
 	`, string(metadataJSON), id)
 	if err != nil {
 		return fmt.Errorf("failed to update request metadata: %w", err)
@@ -330,10 +320,10 @@ func (s *Storage) SearchByTags(searchTags []string, fuzzy bool) ([]string, error
 
 	for _, tag := range searchTags {
 		if fuzzy {
-			conditions = append(conditions, "tag LIKE ?")
+			conditions = append(conditions, fmt.Sprintf("tag LIKE $%d", len(args)+1))
 			args = append(args, "%"+tag+"%")
 		} else {
-			conditions = append(conditions, "tag = ?")
+			conditions = append(conditions, fmt.Sprintf("tag = $%d", len(args)+1))
 			args = append(args, tag)
 		}
 	}
@@ -385,19 +375,18 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 	var args []interface{}
 
 	// Date range filter - use effective_date column (normalized at ingestion time)
-	// effective_date is stored as RFC3339 string, so we need to format the time.Time values
 	if opts.DateStart != nil {
-		whereClauses = append(whereClauses, "r.effective_date >= ?")
-		args = append(args, opts.DateStart.Format(time.RFC3339))
+		whereClauses = append(whereClauses, fmt.Sprintf("r.effective_date >= $%d", len(args)+1))
+		args = append(args, opts.DateStart)
 	}
 	if opts.DateEnd != nil {
-		whereClauses = append(whereClauses, "r.effective_date <= ?")
-		args = append(args, opts.DateEnd.Format(time.RFC3339))
+		whereClauses = append(whereClauses, fmt.Sprintf("r.effective_date <= $%d", len(args)+1))
+		args = append(args, opts.DateEnd)
 	}
 
 	// Source type filter
 	if opts.SourceType != nil {
-		whereClauses = append(whereClauses, "r.source_type = ?")
+		whereClauses = append(whereClauses, fmt.Sprintf("r.source_type = $%d", len(args)+1))
 		args = append(args, *opts.SourceType)
 	}
 
@@ -408,10 +397,10 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 		var tagConditions []string
 		for _, tag := range opts.Tags {
 			if opts.Fuzzy {
-				tagConditions = append(tagConditions, "t.tag LIKE ?")
+				tagConditions = append(tagConditions, fmt.Sprintf("t.tag LIKE $%d", len(args)+1))
 				args = append(args, "%"+tag+"%")
 			} else {
-				tagConditions = append(tagConditions, "t.tag = ?")
+				tagConditions = append(tagConditions, fmt.Sprintf("t.tag = $%d", len(args)+1))
 				args = append(args, tag)
 			}
 		}
@@ -441,11 +430,11 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 	// Add ORDER BY and pagination - order by effective date
 	query += " ORDER BY r.effective_date DESC"
 	if opts.Limit > 0 {
-		query += " LIMIT ?"
+		query += fmt.Sprintf(" LIMIT $%d", len(args)+1)
 		args = append(args, opts.Limit)
 	}
 	if opts.Offset > 0 {
-		query += " OFFSET ?"
+		query += fmt.Sprintf(" OFFSET $%d", len(args)+1)
 		args = append(args, opts.Offset)
 	}
 
@@ -768,8 +757,8 @@ func (s *Storage) GenerateMockData() error {
 func (s *Storage) UpdateSEOEnabled(id string, enabled bool) error {
 	result, err := s.db.Exec(`
 		UPDATE requests
-		SET seo_enabled = ?
-		WHERE id = ?
+		SET seo_enabled = $1
+		WHERE id = $2
 	`, enabled, id)
 	if err != nil {
 		return fmt.Errorf("failed to update SEO enabled status: %w", err)
@@ -792,7 +781,7 @@ func (s *Storage) GetRequestBySlug(slug string) (*Request, error) {
 	query := `
 		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
 		FROM requests
-		WHERE slug = ?
+		WHERE slug = $1
 		LIMIT 1
 	`
 
@@ -845,7 +834,7 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 	defer tx.Rollback()
 
 	// Update tags in database
-	result, err := tx.Exec("UPDATE requests SET tags_json = ? WHERE id = ?", string(tagsJSON), id)
+	result, err := tx.Exec("UPDATE requests SET tags_json = $1 WHERE id = $2", string(tagsJSON), id)
 	if err != nil {
 		return fmt.Errorf("failed to update tags: %w", err)
 	}
@@ -860,13 +849,13 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 	}
 
 	// Delete existing tag associations
-	if _, err := tx.Exec("DELETE FROM tags WHERE request_id = ?", id); err != nil {
+	if _, err := tx.Exec("DELETE FROM tags WHERE request_id = $1", id); err != nil {
 		return fmt.Errorf("failed to delete old tag associations: %w", err)
 	}
 
 	// Insert new tag associations
 	for _, tag := range tags {
-		if _, err := tx.Exec("INSERT INTO tags (request_id, tag) VALUES (?, ?)", id, tag); err != nil {
+		if _, err := tx.Exec("INSERT INTO tags (request_id, tag) VALUES ($1, $2)", id, tag); err != nil {
 			return fmt.Errorf("failed to insert tag association: %w", err)
 		}
 	}
@@ -883,7 +872,7 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 	if hasLowQuality {
 		// Fetch current metadata
 		var metadataJSON string
-		err := tx.QueryRow("SELECT metadata_json FROM requests WHERE id = ?", id).Scan(&metadataJSON)
+		err := tx.QueryRow("SELECT metadata_json FROM requests WHERE id = $1", id).Scan(&metadataJSON)
 		if err != nil {
 			return fmt.Errorf("failed to fetch metadata: %w", err)
 		}
@@ -905,7 +894,7 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 		}
 
 		// Update metadata in database
-		_, err = tx.Exec("UPDATE requests SET metadata_json = ? WHERE id = ?", string(updatedMetadataJSON), id)
+		_, err = tx.Exec("UPDATE requests SET metadata_json = $1 WHERE id = $2", string(updatedMetadataJSON), id)
 		if err != nil {
 			return fmt.Errorf("failed to update metadata with tombstone: %w", err)
 		}

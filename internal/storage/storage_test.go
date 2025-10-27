@@ -2,16 +2,15 @@ package storage
 
 import (
 	"fmt"
-	"os"
 	"testing"
 	"time"
 )
 
 func TestNew(t *testing.T) {
-	dbPath := "test_new.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_new")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -23,10 +22,10 @@ func TestNew(t *testing.T) {
 }
 
 func TestSaveAndGetRequest(t *testing.T) {
-	dbPath := "test_save_get.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_save_get")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -84,10 +83,10 @@ func TestSaveAndGetRequest(t *testing.T) {
 }
 
 func TestSaveTextRequest(t *testing.T) {
-	dbPath := "test_text_request.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_text_request")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -124,10 +123,10 @@ func TestSaveTextRequest(t *testing.T) {
 }
 
 func TestSearchByTags(t *testing.T) {
-	dbPath := "test_search_tags.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_search_tags")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -202,10 +201,10 @@ func TestSearchByTags(t *testing.T) {
 }
 
 func TestListRequests(t *testing.T) {
-	dbPath := "test_list_requests.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_list_requests")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -250,10 +249,10 @@ func TestListRequests(t *testing.T) {
 }
 
 func TestGetRequestNotFound(t *testing.T) {
-	dbPath := "test_not_found.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_not_found")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -269,10 +268,10 @@ func TestGetRequestNotFound(t *testing.T) {
 }
 
 func TestUpdateRequestMetadata(t *testing.T) {
-	dbPath := "test_update_metadata.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_update_metadata")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -323,10 +322,10 @@ func TestUpdateRequestMetadata(t *testing.T) {
 }
 
 func TestUpdateRequestMetadataNotFound(t *testing.T) {
-	dbPath := "test_update_metadata_notfound.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_update_metadata_notfound")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -345,10 +344,10 @@ func TestUpdateRequestMetadataNotFound(t *testing.T) {
 }
 
 func TestDeleteRequest(t *testing.T) {
-	dbPath := "test_delete_request.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_delete_request")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -398,10 +397,10 @@ func TestDeleteRequest(t *testing.T) {
 }
 
 func TestDeleteRequestNotFound(t *testing.T) {
-	dbPath := "test_delete_notfound.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_delete_notfound")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -418,10 +417,10 @@ func TestDeleteRequestNotFound(t *testing.T) {
 
 func TestGetTimelineExtents(t *testing.T) {
 	t.Run("empty database", func(t *testing.T) {
-		dbPath := "test_timeline_extents_empty.db"
-		defer os.Remove(dbPath)
+		connStr, cleanup := setupTestDB(t, "test_timeline_extents_empty")
+		defer cleanup()
 
-		store, err := New(dbPath)
+		store, err := New(connStr)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -438,10 +437,10 @@ func TestGetTimelineExtents(t *testing.T) {
 	})
 
 	t.Run("single document with publish_date", func(t *testing.T) {
-		dbPath := "test_timeline_extents_single.db"
-		defer os.Remove(dbPath)
+		connStr, cleanup := setupTestDB(t, "test_timeline_extents_single")
+		defer cleanup()
 
-		store, err := New(dbPath)
+		store, err := New(connStr)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -488,10 +487,10 @@ func TestGetTimelineExtents(t *testing.T) {
 	})
 
 	t.Run("multiple documents - earliest is in scraper_metadata", func(t *testing.T) {
-		dbPath := "test_timeline_extents_multiple.db"
-		defer os.Remove(dbPath)
+		connStr, cleanup := setupTestDB(t, "test_timeline_extents_multiple")
+		defer cleanup()
 
-		store, err := New(dbPath)
+		store, err := New(connStr)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -545,10 +544,10 @@ func TestGetTimelineExtents(t *testing.T) {
 	})
 
 	t.Run("date precedence - scraper_metadata.publish_date takes priority", func(t *testing.T) {
-		dbPath := "test_timeline_extents_precedence.db"
-		defer os.Remove(dbPath)
+		connStr, cleanup := setupTestDB(t, "test_timeline_extents_precedence")
+		defer cleanup()
 
-		store, err := New(dbPath)
+		store, err := New(connStr)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -599,10 +598,10 @@ func TestGetTimelineExtents(t *testing.T) {
 	})
 
 	t.Run("date precedence - falls back to additional_metadata.date", func(t *testing.T) {
-		dbPath := "test_timeline_extents_fallback.db"
-		defer os.Remove(dbPath)
+		connStr, cleanup := setupTestDB(t, "test_timeline_extents_fallback")
+		defer cleanup()
 
-		store, err := New(dbPath)
+		store, err := New(connStr)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -647,10 +646,10 @@ func TestGetTimelineExtents(t *testing.T) {
 	})
 
 	t.Run("date precedence - falls back to created_at", func(t *testing.T) {
-		dbPath := "test_timeline_extents_created_at.db"
-		defer os.Remove(dbPath)
+		connStr, cleanup := setupTestDB(t, "test_timeline_extents_created_at")
+		defer cleanup()
 
-		store, err := New(dbPath)
+		store, err := New(connStr)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -691,10 +690,10 @@ func TestGetTimelineExtents(t *testing.T) {
 	})
 
 	t.Run("mixed metadata structures", func(t *testing.T) {
-		dbPath := "test_timeline_extents_mixed.db"
-		defer os.Remove(dbPath)
+		connStr, cleanup := setupTestDB(t, "test_timeline_extents_mixed")
+		defer cleanup()
 
-		store, err := New(dbPath)
+		store, err := New(connStr)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
@@ -776,10 +775,10 @@ func TestGetTimelineExtents(t *testing.T) {
 }
 
 func TestUpdateSEOEnabled(t *testing.T) {
-	dbPath := "test_update_seo.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_update_seo")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -844,10 +843,10 @@ func TestUpdateSEOEnabled(t *testing.T) {
 }
 
 func TestUpdateSEOEnabledNotFound(t *testing.T) {
-	dbPath := "test_update_seo_notfound.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_update_seo_notfound")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -863,10 +862,10 @@ func TestUpdateSEOEnabledNotFound(t *testing.T) {
 }
 
 func TestGetRequestBySlug(t *testing.T) {
-	dbPath := "test_get_by_slug.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_get_by_slug")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -928,10 +927,10 @@ func TestGetRequestBySlug(t *testing.T) {
 }
 
 func TestSlugUniqueness(t *testing.T) {
-	dbPath := "test_slug_uniqueness.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_slug_uniqueness")
+	defer cleanup()
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}

@@ -2,31 +2,31 @@ package storage
 
 import (
 	"fmt"
-	"os"
 	"testing"
 	"time"
 )
 
-// setupTestDB creates a temporary test database and returns a cleanup function
-func setupTestDB(t *testing.T) (*Storage, func()) {
+// setupTestStorage creates a temporary test database and returns a Storage instance with cleanup function
+func setupTestStorage(t *testing.T) (*Storage, func()) {
 	t.Helper()
-	dbPath := fmt.Sprintf("test_scrape_jobs_%d.db", time.Now().UnixNano())
+	testName := fmt.Sprintf("scrape_jobs_%d", time.Now().UnixNano())
+	connStr, dbCleanup := setupTestDB(t, testName)
 
-	store, err := New(dbPath)
+	store, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create test storage: %v", err)
 	}
 
 	cleanup := func() {
 		store.Close()
-		os.Remove(dbPath)
+		dbCleanup()
 	}
 
 	return store, cleanup
 }
 
 func TestScrapeJobCRUD(t *testing.T) {
-	store, cleanup := setupTestDB(t)
+	store, cleanup := setupTestStorage(t)
 	defer cleanup()
 
 	// Create a parent job
@@ -80,7 +80,7 @@ func TestScrapeJobCRUD(t *testing.T) {
 }
 
 func TestScrapeJobParentChild(t *testing.T) {
-	store, cleanup := setupTestDB(t)
+	store, cleanup := setupTestStorage(t)
 	defer cleanup()
 
 	// Create parent job
@@ -166,7 +166,7 @@ func TestScrapeJobParentChild(t *testing.T) {
 }
 
 func TestListScrapeJobsOnlyParents(t *testing.T) {
-	store, cleanup := setupTestDB(t)
+	store, cleanup := setupTestStorage(t)
 	defer cleanup()
 
 	// Create parent jobs
@@ -282,7 +282,7 @@ func TestListScrapeJobsOnlyParents(t *testing.T) {
 }
 
 func TestUpdateScrapeJobStatus(t *testing.T) {
-	store, cleanup := setupTestDB(t)
+	store, cleanup := setupTestStorage(t)
 	defer cleanup()
 
 	jobID := "test-job-789"
@@ -342,7 +342,7 @@ func TestUpdateScrapeJobStatus(t *testing.T) {
 }
 
 func TestIncrementScrapeJobRetries(t *testing.T) {
-	store, cleanup := setupTestDB(t)
+	store, cleanup := setupTestStorage(t)
 	defer cleanup()
 
 	jobID := "retry-job-001"
@@ -380,7 +380,7 @@ func TestIncrementScrapeJobRetries(t *testing.T) {
 }
 
 func TestDeleteScrapeJob(t *testing.T) {
-	store, cleanup := setupTestDB(t)
+	store, cleanup := setupTestStorage(t)
 	defer cleanup()
 
 	jobID := "delete-job-001"
@@ -425,7 +425,7 @@ func TestDeleteScrapeJob(t *testing.T) {
 }
 
 func TestMultiLevelHierarchy(t *testing.T) {
-	store, cleanup := setupTestDB(t)
+	store, cleanup := setupTestStorage(t)
 	defer cleanup()
 
 	// Create a 3-level hierarchy

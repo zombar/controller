@@ -9,6 +9,13 @@ import (
 // PostgreSQL-specific migrations
 // These migrations are designed for PostgreSQL and use PostgreSQL-specific features like SERIAL, JSONB, etc.
 
+// Migration represents a database schema migration
+type Migration struct {
+	Version int
+	Name    string
+	SQL     string
+}
+
 var postgresMigrations = []Migration{
 	{
 		Version: 1,

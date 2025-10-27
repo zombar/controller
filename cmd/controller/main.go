@@ -71,8 +71,12 @@ func main() {
 		logger.Info("tracing initialized successfully")
 	}
 
+	// Construct PostgreSQL connection string
+	dbConnStr := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+		cfg.DBHost, cfg.DBPort, cfg.DBUser, cfg.DBPassword, cfg.DBName)
+
 	// Initialize storage
-	store, err := storage.New(cfg.DatabasePath)
+	store, err := storage.New(dbConnStr)
 	if err != nil {
 		logger.Error("failed to initialize storage", "error", err)
 		os.Exit(1)
@@ -337,7 +341,8 @@ func main() {
 			"scraper_url", cfg.ScraperBaseURL,
 			"textanalyzer_url", cfg.TextAnalyzerBaseURL,
 			"scheduler_url", cfg.SchedulerBaseURL,
-			"database", cfg.DatabasePath,
+			"db_host", cfg.DBHost,
+			"db_name", cfg.DBName,
 			"link_score_threshold", cfg.LinkScoreThreshold,
 		)
 

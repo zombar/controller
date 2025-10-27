@@ -12,7 +12,11 @@ type Config struct {
 	TextAnalyzerBaseURL string
 	SchedulerBaseURL    string
 	Port                int
-	DatabasePath        string
+	DBHost              string  // PostgreSQL host
+	DBPort              int     // PostgreSQL port
+	DBUser              string  // PostgreSQL user
+	DBPassword          string  // PostgreSQL password
+	DBName              string  // PostgreSQL database name
 	LinkScoreThreshold  float64 // Minimum score for link recommendation (0.0-1.0)
 	GenerateMockData    bool    // Generate 6 months of mock historical data on startup (~600 documents)
 	WebInterfaceURL     string  // URL for the web interface (for footer links on static pages)
@@ -28,7 +32,11 @@ func Load() (*Config, error) {
 		TextAnalyzerBaseURL: getEnv("TEXTANALYZER_BASE_URL", "http://localhost:8082"),
 		SchedulerBaseURL:    getEnv("SCHEDULER_BASE_URL", "http://localhost:8083"),
 		Port:                getEnvAsInt("CONTROLLER_PORT", 8080),
-		DatabasePath:        getEnv("DATABASE_PATH", "./controller.db"),
+		DBHost:              getEnv("DB_HOST", "localhost"),
+		DBPort:              getEnvAsInt("DB_PORT", 5432),
+		DBUser:              getEnv("DB_USER", "docutab"),
+		DBPassword:          getEnv("DB_PASSWORD", "docutab_dev_pass"),
+		DBName:              getEnv("DB_NAME", "docutab"),
 		LinkScoreThreshold:  getEnvAsFloat("LINK_SCORE_THRESHOLD", 0.5),
 		GenerateMockData:    getEnvAsBool("GENERATE_MOCK_DATA", false),
 		WebInterfaceURL:     getEnv("WEB_INTERFACE_URL", "http://localhost:5173"),
@@ -58,8 +66,17 @@ func (c *Config) Validate() error {
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("CONTROLLER_PORT must be between 1 and 65535")
 	}
-	if c.DatabasePath == "" {
-		return fmt.Errorf("DATABASE_PATH is required")
+	if c.DBHost == "" {
+		return fmt.Errorf("DB_HOST is required")
+	}
+	if c.DBPort <= 0 || c.DBPort > 65535 {
+		return fmt.Errorf("DB_PORT must be between 1 and 65535")
+	}
+	if c.DBUser == "" {
+		return fmt.Errorf("DB_USER is required")
+	}
+	if c.DBName == "" {
+		return fmt.Errorf("DB_NAME is required")
 	}
 	if c.LinkScoreThreshold < 0.0 || c.LinkScoreThreshold > 1.0 {
 		return fmt.Errorf("LINK_SCORE_THRESHOLD must be between 0.0 and 1.0")

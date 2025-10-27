@@ -2,7 +2,6 @@ package storage
 
 import (
 	"encoding/json"
-	"os"
 	"testing"
 	"time"
 )
@@ -24,10 +23,10 @@ import (
  */
 
 func TestUpdateRequestTags_AutoTombstone_LowQuality(t *testing.T) {
-	dbPath := "test_tombstone_lowquality.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "tombstone_lowquality")
+	defer cleanup()
 
-	storage, err := New(dbPath)
+	storage, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -104,10 +103,10 @@ func TestUpdateRequestTags_AutoTombstone_LowQuality(t *testing.T) {
 }
 
 func TestUpdateRequestTags_AutoTombstone_SparseContent(t *testing.T) {
-	dbPath := "test_tombstone_sparse.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "tombstone_sparse")
+	defer cleanup()
 
-	storage, err := New(dbPath)
+	storage, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -159,10 +158,10 @@ func TestUpdateRequestTags_AutoTombstone_SparseContent(t *testing.T) {
 }
 
 func TestUpdateRequestTags_AutoTombstone_BothTags(t *testing.T) {
-	dbPath := "test_tombstone_both.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "tombstone_both")
+	defer cleanup()
 
-	storage, err := New(dbPath)
+	storage, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -212,10 +211,10 @@ func TestUpdateRequestTags_AutoTombstone_BothTags(t *testing.T) {
 }
 
 func TestUpdateRequestTags_NoAutoTombstone_NormalTags(t *testing.T) {
-	dbPath := "test_tombstone_normal.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "tombstone_normal")
+	defer cleanup()
 
-	storage, err := New(dbPath)
+	storage, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -254,10 +253,10 @@ func TestUpdateRequestTags_NoAutoTombstone_NormalTags(t *testing.T) {
 }
 
 func TestUpdateRequestTags_PreservesExistingMetadata(t *testing.T) {
-	dbPath := "test_tombstone_preserve.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "tombstone_preserve")
+	defer cleanup()
 
-	storage, err := New(dbPath)
+	storage, err := New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}

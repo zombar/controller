@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -183,9 +182,9 @@ func setupTestHandler(t *testing.T) (*Handler, *httptest.Server, *httptest.Serve
 	prometheus.DefaultRegisterer = prometheus.NewRegistry()
 
 	// Create a unique database file for each test to avoid interference
-	dbPath := fmt.Sprintf("test_handlers_%s.db", strings.ReplaceAll(t.Name(), "/", "_"))
+	connStr, dbCleanup := setupTestDB(t, strings.ReplaceAll(t.Name(), "/", "_"))
 
-	store, err := storage.New(dbPath)
+	store, err := storage.New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -202,7 +201,7 @@ func setupTestHandler(t *testing.T) (*Handler, *httptest.Server, *httptest.Serve
 		store.Close()
 		scraperMock.Close()
 		textAnalyzerMock.Close()
-		os.Remove(dbPath)
+		dbCleanup()
 	}
 
 	return handler, scraperMock, textAnalyzerMock, cleanup
@@ -1324,10 +1323,10 @@ func TestTombstoneRequest(t *testing.T) {
 	textanalyzerServer := mockTextAnalyzerServer()
 	defer textanalyzerServer.Close()
 
-	dbPath := "test_tombstone_request.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_tombstone_request")
+	defer cleanup()
 
-	store, err := storage.New(dbPath)
+	store, err := storage.New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -1402,10 +1401,10 @@ func TestTombstoneRequestNotFound(t *testing.T) {
 	textanalyzerServer := mockTextAnalyzerServer()
 	defer textanalyzerServer.Close()
 
-	dbPath := "test_tombstone_notfound.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_tombstone_notfound")
+	defer cleanup()
 
-	store, err := storage.New(dbPath)
+	store, err := storage.New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -1438,10 +1437,10 @@ func TestUntombstoneRequest(t *testing.T) {
 	textanalyzerServer := mockTextAnalyzerServer()
 	defer textanalyzerServer.Close()
 
-	dbPath := "test_untombstone_request.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_untombstone_request")
+	defer cleanup()
 
-	store, err := storage.New(dbPath)
+	store, err := storage.New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -1500,10 +1499,10 @@ func TestDeleteRequest(t *testing.T) {
 	textanalyzerServer := mockTextAnalyzerServer()
 	defer textanalyzerServer.Close()
 
-	dbPath := "test_delete_request.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_delete_request")
+	defer cleanup()
 
-	store, err := storage.New(dbPath)
+	store, err := storage.New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -1558,10 +1557,10 @@ func TestDeleteRequestNotFound(t *testing.T) {
 	textanalyzerServer := mockTextAnalyzerServer()
 	defer textanalyzerServer.Close()
 
-	dbPath := "test_delete_notfound.db"
-	defer os.Remove(dbPath)
+	connStr, cleanup := setupTestDB(t, "test_delete_notfound")
+	defer cleanup()
 
-	store, err := storage.New(dbPath)
+	store, err := storage.New(connStr)
 	if err != nil {
 		t.Fatalf("Failed to create storage: %v", err)
 	}
@@ -1628,10 +1627,10 @@ func TestGetTimelineExtents(t *testing.T) {
 
 	t.Run("returns earliest effective date from documents", func(t *testing.T) {
 		// Create custom storage for this test
-		dbPath := "test_timeline_extents_handler.db"
-		defer os.Remove(dbPath)
+		connStr, cleanup := setupTestDB(t, "test_timeline_extents_handler")
+		defer cleanup()
 
-		store, err := storage.New(dbPath)
+		store, err := storage.New(connStr)
 		if err != nil {
 			t.Fatalf("Failed to create storage: %v", err)
 		}
