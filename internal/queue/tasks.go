@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/url"
 	"strings"
 	"time"
@@ -200,8 +199,11 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 			w.businessMetrics.TombstoneDaysHistogram.WithLabelValues("low-score").Observe(float64(w.tombstonePeriodLowScore))
 		}
 
-		log.Printf("Low-quality URL marked for tombstoning: %s (score: %.2f, threshold: %.2f)",
-			url, scoreResp.Score.Score, w.linkScoreThreshold)
+		w.logger.Info("low-quality URL marked for tombstoning",
+			"url", url,
+			"score", scoreResp.Score.Score,
+			"threshold", w.linkScoreThreshold,
+		)
 		return nil
 	}
 
@@ -237,18 +239,28 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 		// Compress the raw text for storage and AI enrichment
 		compressedRawText, err := compressHTML(scrapeResp.RawText)
 		if err != nil {
-			log.Printf("Warning: failed to compress raw text for %s: %v", url, err)
+			w.logger.Warn("failed to compress raw text",
+				"url", url,
+				"error", err,
+			)
 			compressedRawText = "" // Continue without compressed HTML
 		}
 
 		jobID, err := w.textAnalyzerClient.EnqueueAnalysis(ctx, scrapeResp.Content, compressedRawText, images)
 		if err != nil {
 			// Log error but don't fail the scrape - analysis can be retried later
-			log.Printf("Warning: failed to enqueue text analysis for %s: %v", url, err)
+			w.logger.Warn("failed to enqueue text analysis",
+				"url", url,
+				"error", err,
+			)
 		} else {
 			textAnalyzerJobID = jobID
-			log.Printf("Enqueued text analysis job %s for %s (images: %d, compressed HTML: %v)",
-				jobID, url, len(images), compressedRawText != "")
+			w.logger.Info("enqueued text analysis job",
+				"job_id", jobID,
+				"url", url,
+				"image_count", len(images),
+				"has_compressed_html", compressedRawText != "",
+			)
 		}
 	}
 
@@ -341,18 +353,26 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 		return fmt.Errorf("failed to update job result: %w", err)
 	}
 
-	log.Printf("Scrape job %s completed successfully, result saved as %s", jobID, requestID)
+	w.logger.Info("scrape job completed successfully",
+		"job_id", jobID,
+		"request_id", requestID,
+	)
 
 	// Enqueue analysis result retrieval task if text analysis was enqueued
 	if textAnalyzerJobID != "" && w.queueClient != nil {
 		_, err := w.queueClient.EnqueueRetrieveAnalysis(ctx, requestID, textAnalyzerJobID, 0)
 		if err != nil {
 			// Log error but don't fail the scrape - retrieval can be retried manually if needed
-			log.Printf("Warning: failed to enqueue analysis retrieval for request %s (analysis job %s): %v",
-				requestID, textAnalyzerJobID, err)
+			w.logger.Warn("failed to enqueue analysis retrieval",
+				"request_id", requestID,
+				"analysis_job_id", textAnalyzerJobID,
+				"error", err,
+			)
 		} else {
-			log.Printf("Enqueued analysis retrieval task for request %s (analysis job %s)",
-				requestID, textAnalyzerJobID)
+			w.logger.Info("enqueued analysis retrieval task",
+				"request_id", requestID,
+				"analysis_job_id", textAnalyzerJobID,
+			)
 		}
 	}
 
@@ -371,18 +391,31 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 		// Get current job to check depth
 		job, err := w.storage.GetScrapeJob(jobID)
 		if err != nil {
-			log.Printf("Failed to get job for link extraction: %v", err)
+			w.logger.Error("failed to get job for link extraction",
+				"job_id", jobID,
+				"error", err,
+			)
 		} else if job != nil && job.Depth < w.maxLinkDepth {
-			log.Printf("Queueing link extraction task for %s (depth: %d/%d)", url, job.Depth, w.maxLinkDepth)
+			w.logger.Info("queueing link extraction task",
+				"url", url,
+				"depth", job.Depth,
+				"max_depth", w.maxLinkDepth,
+			)
 			// Enqueue link extraction as a separate task, preserving trace context
 			if w.queueClient != nil {
 				_, err := w.queueClient.EnqueueExtractLinks(ctx, jobID, url, job.Depth)
 				if err != nil {
-					log.Printf("Failed to enqueue extract links task for %s: %v", url, err)
+					w.logger.Error("failed to enqueue extract links task",
+						"url", url,
+						"error", err,
+					)
 				}
 			}
 		} else if job != nil {
-			log.Printf("Skipping link extraction from %s: max depth %d reached", url, w.maxLinkDepth)
+			w.logger.Info("skipping link extraction, max depth reached",
+				"url", url,
+				"max_depth", w.maxLinkDepth,
+			)
 		}
 	}
 
@@ -440,7 +473,10 @@ func shouldSkipURL(rawURL string) bool {
 func (w *Worker) extractAndQueueLinks(ctx context.Context, parentJobID, sourceURL string, parentDepth int) {
 	extractResp, err := w.scraperClient.ExtractLinks(ctx, sourceURL)
 	if err != nil {
-		log.Printf("Failed to extract links from %s: %v", sourceURL, err)
+		w.logger.Error("failed to extract links",
+			"source_url", sourceURL,
+			"error", err,
+		)
 		return
 	}
 
@@ -454,13 +490,19 @@ func (w *Worker) extractAndQueueLinks(ctx context.Context, parentJobID, sourceUR
 
 	skippedCount := len(extractResp.Links) - len(scrapableLinks)
 	if skippedCount > 0 {
-		log.Printf("Filtered out %d non-scrapable URLs from %s", skippedCount, sourceURL)
+		w.logger.Info("filtered out non-scrapable URLs",
+			"source_url", sourceURL,
+			"skipped_count", skippedCount,
+		)
 	}
 
 	// Process all extracted links (no limit)
 	links := scrapableLinks
 
-	log.Printf("Queueing %d extracted links for scraping (child depth: %d)", len(links), parentDepth+1)
+	w.logger.Info("queueing extracted links for scraping",
+		"link_count", len(links),
+		"child_depth", parentDepth+1,
+	)
 
 	childDepth := parentDepth + 1
 	shouldExtractLinks := childDepth < w.maxLinkDepth
@@ -479,7 +521,10 @@ func (w *Worker) extractAndQueueLinks(ctx context.Context, parentJobID, sourceUR
 		}
 
 		if err := w.storage.SaveScrapeJob(job); err != nil {
-			log.Printf("Failed to save scrape job for %s: %v", link, err)
+			w.logger.Error("failed to save scrape job",
+				"url", link,
+				"error", err,
+			)
 			continue
 		}
 
@@ -487,16 +532,27 @@ func (w *Worker) extractAndQueueLinks(ctx context.Context, parentJobID, sourceUR
 		if w.queueClient != nil {
 			taskID, err := w.queueClient.EnqueueScrapeWithParent(ctx, jobID, link, shouldExtractLinks, &parentJobID, childDepth)
 			if err != nil {
-				log.Printf("Failed to enqueue task for %s: %v", link, err)
+				w.logger.Error("failed to enqueue task",
+					"url", link,
+					"error", err,
+				)
 				continue
 			}
 
 			// Update job with task ID
 			if err := w.storage.UpdateScrapeJobTaskID(jobID, taskID); err != nil {
-				log.Printf("Warning: Failed to update task ID for job %s: %v", jobID, err)
+				w.logger.Warn("failed to update task ID",
+					"job_id", jobID,
+					"error", err,
+				)
 			}
 
-			log.Printf("[%d/%d] Queued child job %s for link: %s (extract_links=%v)", i+1, len(links), jobID, link, shouldExtractLinks)
+			w.logger.Info("queued child job",
+				"job_id", jobID,
+				"url", link,
+				"extract_links", shouldExtractLinks,
+				"progress", fmt.Sprintf("%d/%d", i+1, len(links)),
+			)
 		}
 	}
 }
