@@ -26,7 +26,7 @@ func setupTestDB(t *testing.T, testName string) (connStr string, cleanup func())
 	dbName := fmt.Sprintf("test_%s_%d", testName, time.Now().UnixNano())
 
 	// Connect to default 'postgres' database to create test database
-	adminConnStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=postgres sslmode=disable",
+	adminConnStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=postgres sslmode=disable connect_timeout=5",
 		host, port, user, password)
 
 	adminDB, err := sql.Open("postgres", adminConnStr)
@@ -50,7 +50,7 @@ func setupTestDB(t *testing.T, testName string) (connStr string, cleanup func())
 	}
 
 	// Return connection string for test database and cleanup function
-	testConnStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+	testConnStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable connect_timeout=5",
 		host, port, user, password, dbName)
 
 	cleanup = func() {
