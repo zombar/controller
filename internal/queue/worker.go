@@ -98,8 +98,9 @@ func NewWorker(
 		// Queue priority: higher value = higher priority
 		// Named queues for clarity: scrape tasks get highest priority, link extraction is lower
 		Queues: map[string]int{
-			"scrape":         6, // URL scraping tasks (highest priority)
-			"link-extraction": 3, // Link extraction and processing (lower priority)
+			"scrape":             6, // URL scraping tasks (highest priority)
+			"analysis-retrieval": 4, // Text analysis result retrieval (medium priority)
+			"link-extraction":    3, // Link extraction and processing (lower priority)
 		},
 
 		// StrictPriority: false means queues are processed proportionally
@@ -108,16 +109,21 @@ func NewWorker(
 
 		// Retry configuration
 		RetryDelayFunc: func(n int, err error, task *asynq.Task) time.Duration {
-			// Exponential backoff: 1min, 5min, 15min
+			// Exponential backoff up to 24 hours: 1m, 5m, 15m, 30m, 1h, 2h, 4h, 8h
 			delays := []time.Duration{
 				1 * time.Minute,
 				5 * time.Minute,
 				15 * time.Minute,
+				30 * time.Minute,
+				1 * time.Hour,
+				2 * time.Hour,
+				4 * time.Hour,
+				8 * time.Hour,
 			}
 			if n < len(delays) {
 				return delays[n]
 			}
-			return delays[len(delays)-1]
+			return delays[len(delays)-1] // Cap at 8 hours
 		},
 
 		// Graceful shutdown timeout
@@ -167,16 +173,14 @@ func (w *Worker) registerHandlers() {
 	// Register the scrape URL handler
 	w.mux.HandleFunc(TypeScrapeURL, w.handleScrapeTask)
 	w.mux.HandleFunc(TypeExtractLinks, w.handleExtractLinksTask)
-
-	// Add more handlers here as needed
-	// w.mux.HandleFunc(TypeAnalyzeText, w.handleAnalyzeTask)
+	w.mux.HandleFunc(TypeRetrieveAnalysis, w.handleRetrieveAnalysis)
 }
 
 // Start starts the worker to begin processing tasks
 func (w *Worker) Start() error {
 	w.logger.Info("starting asynq worker",
 		"concurrency", w.concurrency,
-		"queues", map[string]int{"scrape": 6, "link-extraction": 3},
+		"queues", map[string]int{"scrape": 6, "analysis-retrieval": 4, "link-extraction": 3},
 	)
 
 	// Run is blocking - starts processing tasks

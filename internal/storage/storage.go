@@ -395,6 +395,10 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 	var whereClauses []string
 	var args []interface{}
 
+	// Always filter out tombstoned content and SEO-disabled content
+	whereClauses = append(whereClauses, "r.seo_enabled = true")
+	whereClauses = append(whereClauses, "(r.metadata_json->>'tombstone_datetime' IS NULL OR (r.metadata_json->>'tombstone_datetime')::timestamp > NOW())")
+
 	// Date range filter - use effective_date column (normalized at ingestion time)
 	if opts.DateStart != nil {
 		whereClauses = append(whereClauses, fmt.Sprintf("r.effective_date >= $%d", len(args)+1))
@@ -428,7 +432,7 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 
 		// Use INNER JOIN to filter by tags
 		query = `
-			SELECT DISTINCT r.id, r.created_at, r.effective_date, r.source_type, r.source_url, r.scraper_uuid, r.textanalyzer_uuid, r.tags_json, r.metadata_json
+			SELECT DISTINCT r.id, r.created_at, r.effective_date, r.source_type, r.source_url, r.scraper_uuid, r.textanalyzer_uuid, r.tags_json, r.metadata_json, r.slug, r.seo_enabled
 			FROM requests r
 			INNER JOIN tags t ON r.id = t.request_id
 			WHERE (` + strings.Join(tagConditions, " OR ") + `)`
@@ -440,7 +444,7 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 	} else {
 		// No tags specified, query requests table directly
 		query = `
-			SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json
+			SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
 			FROM requests r`
 
 		if len(whereClauses) > 0 {
@@ -470,7 +474,7 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 		var req Request
 		var tagsJSON, metadataJSON, effectiveDateStr sql.NullString
 
-		err := rows.Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON)
+		err := rows.Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON, &req.Slug, &req.SEOEnabled)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan request: %w", err)
 		}
@@ -518,6 +522,11 @@ func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 	query := `
 		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
 		FROM requests
+		WHERE seo_enabled = true
+		  AND (
+		    metadata_json->>'tombstone_datetime' IS NULL
+		    OR (metadata_json->>'tombstone_datetime')::timestamp > NOW()
+		  )
 		ORDER BY effective_date DESC
 		LIMIT $1 OFFSET $2
 	`

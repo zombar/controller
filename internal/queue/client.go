@@ -13,8 +13,9 @@ import (
 
 // Task type constants
 const (
-	TypeScrapeURL    = "scrape:url"
-	TypeExtractLinks = "extract:links"
+	TypeScrapeURL        = "scrape:url"
+	TypeExtractLinks     = "extract:links"
+	TypeRetrieveAnalysis = "retrieve:analysis"
 )
 
 // ScrapeTaskPayload represents the payload for a scrape task
@@ -35,6 +36,17 @@ type ExtractLinksTaskPayload struct {
 	ParentJobID string `json:"parent_job_id"`
 	SourceURL   string `json:"source_url"`
 	ParentDepth int    `json:"parent_depth"`
+	// Tracing and timing fields
+	TraceID    string `json:"trace_id,omitempty"`
+	SpanID     string `json:"span_id,omitempty"`
+	EnqueuedAt int64  `json:"enqueued_at"` // Unix timestamp in nanoseconds
+}
+
+// RetrieveAnalysisTaskPayload represents the payload for retrieving text analysis results
+type RetrieveAnalysisTaskPayload struct {
+	RequestID     string `json:"request_id"`      // The request ID to update
+	AnalysisJobID string `json:"analysis_job_id"` // The TextAnalyzer job ID to poll
+	AttemptCount  int    `json:"attempt_count"`   // Current retry attempt (for logging)
 	// Tracing and timing fields
 	TraceID    string `json:"trace_id,omitempty"`
 	SpanID     string `json:"span_id,omitempty"`
@@ -109,8 +121,8 @@ func (c *Client) EnqueueScrapeWithParent(ctx context.Context, jobID, url string,
 	// Task options
 	opts := []asynq.Option{
 		asynq.TaskID(jobID),                   // Use job ID as task ID for correlation
-		asynq.MaxRetry(3),                     // Max 3 retries
-		asynq.Timeout(10 * time.Minute),       // 10 minute timeout per task
+		asynq.MaxRetry(12),                    // Max 12 retries over 24 hours
+		asynq.Timeout(3 * time.Hour),          // 3 hour timeout per task (handles service overload scenarios)
 		asynq.Queue("scrape"),                 // Scrape queue (high priority)
 		asynq.Retention(7 * 24 * time.Hour),   // Keep completed tasks for 7 days
 		asynq.Unique(time.Minute),             // Prevent duplicate tasks within 1 minute
@@ -150,8 +162,8 @@ func (c *Client) EnqueueScrapeWithDelay(ctx context.Context, jobID, url string, 
 
 	opts := []asynq.Option{
 		asynq.ProcessIn(delay),              // Delay execution
-		asynq.MaxRetry(3),
-		asynq.Timeout(10 * time.Minute),
+		asynq.MaxRetry(12),                  // Max 12 retries over 24 hours
+		asynq.Timeout(3 * time.Hour),        // 3 hour timeout per task
 		asynq.Queue("scrape"),               // Scrape queue (high priority)
 	}
 
@@ -194,8 +206,8 @@ func (c *Client) EnqueueExtractLinks(ctx context.Context, parentJobID, sourceURL
 	task := asynq.NewTask(TypeExtractLinks, payloadBytes)
 
 	opts := []asynq.Option{
-		asynq.MaxRetry(2),                  // Retry up to 2 times
-		asynq.Timeout(5 * time.Minute),     // Link extraction should be fast
+		asynq.MaxRetry(12),                 // Max 12 retries over 24 hours
+		asynq.Timeout(1 * time.Hour),       // 1 hour timeout for link extraction
 		asynq.Queue("link-extraction"),     // Link extraction queue (lower priority)
 		asynq.ProcessIn(1 * time.Second),   // Small delay to ensure parent task fully completes
 	}
@@ -203,6 +215,79 @@ func (c *Client) EnqueueExtractLinks(ctx context.Context, parentJobID, sourceURL
 	info, err := c.client.Enqueue(task, opts...)
 	if err != nil {
 		return "", fmt.Errorf("failed to enqueue extract links task: %w", err)
+	}
+
+	return info.ID, nil
+}
+
+// EnqueueRetrieveAnalysis enqueues a task to retrieve text analysis results from TextAnalyzer
+// First attempt is delayed by 30 seconds, subsequent retries use exponential backoff up to 24 hours
+func (c *Client) EnqueueRetrieveAnalysis(ctx context.Context, requestID, analysisJobID string, attemptCount int) (string, error) {
+	payload := RetrieveAnalysisTaskPayload{
+		RequestID:     requestID,
+		AnalysisJobID: analysisJobID,
+		AttemptCount:  attemptCount,
+		EnqueuedAt:    time.Now().UnixNano(),
+	}
+
+	// Add tracing context if available
+	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+		spanCtx := span.SpanContext()
+		payload.TraceID = spanCtx.TraceID().String()
+		payload.SpanID = spanCtx.SpanID().String()
+
+		// Record enqueue event
+		span.AddEvent("analysis_retrieval_enqueued", trace.WithAttributes(
+			attribute.String("task.type", TypeRetrieveAnalysis),
+			attribute.String("request_id", requestID),
+			attribute.String("analysis_job_id", analysisJobID),
+			attribute.Int("attempt_count", attemptCount),
+		))
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal task payload: %w", err)
+	}
+
+	task := asynq.NewTask(TypeRetrieveAnalysis, payloadBytes)
+
+	// Calculate delay based on attempt count
+	// Delays: 30s, 2m, 5m, 10m, 20m, 40m, 1h, 2h, 4h, 8h (total: ~15 attempts over 24 hours)
+	var delay time.Duration
+	if attemptCount == 0 {
+		delay = 30 * time.Second
+	} else {
+		// Exponential backoff: 2m, 5m, 10m, 20m, 40m, 1h, 2h, 4h, 8h
+		delays := []time.Duration{
+			2 * time.Minute,
+			5 * time.Minute,
+			10 * time.Minute,
+			20 * time.Minute,
+			40 * time.Minute,
+			1 * time.Hour,
+			2 * time.Hour,
+			4 * time.Hour,
+			8 * time.Hour,
+		}
+		if attemptCount-1 < len(delays) {
+			delay = delays[attemptCount-1]
+		} else {
+			delay = 8 * time.Hour // Cap at 8 hours
+		}
+	}
+
+	opts := []asynq.Option{
+		asynq.ProcessIn(delay),              // Delay for exponential backoff
+		asynq.MaxRetry(12),                  // Max 12 retries over 24 hours
+		asynq.Timeout(3 * time.Hour),        // 3 hour timeout - includes waiting for AI processing (Ollama)
+		asynq.Queue("analysis-retrieval"),   // Analysis retrieval queue (medium priority)
+		asynq.Retention(7 * 24 * time.Hour), // Keep completed tasks for 7 days
+	}
+
+	info, err := c.client.Enqueue(task, opts...)
+	if err != nil {
+		return "", fmt.Errorf("failed to enqueue retrieve analysis task: %w", err)
 	}
 
 	return info.ID, nil

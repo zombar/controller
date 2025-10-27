@@ -343,6 +343,19 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 
 	log.Printf("Scrape job %s completed successfully, result saved as %s", jobID, requestID)
 
+	// Enqueue analysis result retrieval task if text analysis was enqueued
+	if textAnalyzerJobID != "" && w.queueClient != nil {
+		_, err := w.queueClient.EnqueueRetrieveAnalysis(ctx, requestID, textAnalyzerJobID, 0)
+		if err != nil {
+			// Log error but don't fail the scrape - retrieval can be retried manually if needed
+			log.Printf("Warning: failed to enqueue analysis retrieval for request %s (analysis job %s): %v",
+				requestID, textAnalyzerJobID, err)
+		} else {
+			log.Printf("Enqueued analysis retrieval task for request %s (analysis job %s)",
+				requestID, textAnalyzerJobID)
+		}
+	}
+
 	// Populate URL cache with scraper UUID for 30-day caching
 	if w.urlCache != nil && scrapeResp.ID != "" {
 		if err := w.urlCache.Set(ctx, url, scrapeResp.ID); err != nil {
@@ -564,6 +577,160 @@ func (w *Worker) handleExtractLinksTask(ctx context.Context, t *asynq.Task) erro
 
 	// Extract and queue links - this runs in its own task with its own context
 	w.extractAndQueueLinks(ctx, payload.ParentJobID, payload.SourceURL, payload.ParentDepth)
+
+	return nil
+}
+
+// handleRetrieveAnalysis processes a text analysis result retrieval task
+func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) error {
+	// Parse payload
+	var payload RetrieveAnalysisTaskPayload
+	if err := json.Unmarshal(t.Payload(), &payload); err != nil {
+		w.logger.Error("failed to unmarshal retrieve analysis task payload", "error", err)
+		return fmt.Errorf("invalid task payload: %w", err)
+	}
+
+	w.logger.Info("retrieving text analysis results",
+		"request_id", payload.RequestID,
+		"analysis_job_id", payload.AnalysisJobID,
+		"attempt", payload.AttemptCount,
+	)
+
+	// Retrieve analysis result from TextAnalyzer service
+	result, err := w.textAnalyzerClient.GetAnalysisResult(ctx, payload.AnalysisJobID)
+	if err != nil {
+		w.logger.Error("failed to retrieve analysis result",
+			"analysis_job_id", payload.AnalysisJobID,
+			"error", err,
+		)
+		// Return error to trigger retry
+		return fmt.Errorf("failed to retrieve analysis result: %w", err)
+	}
+
+	w.logger.Info("analysis result retrieved",
+		"analysis_job_id", payload.AnalysisJobID,
+		"status", result.Status,
+	)
+
+	// If analysis not completed yet, return error to trigger retry
+	if result.Status != "completed" {
+		w.logger.Info("analysis not yet completed, will retry later",
+			"analysis_job_id", payload.AnalysisJobID,
+			"status", result.Status,
+		)
+		return fmt.Errorf("analysis not completed (status: %s)", result.Status)
+	}
+
+	// Extract quality score and other metadata from result
+	qualityScore := 0.0
+	if scoreVal, ok := result.Result["quality_score"].(map[string]interface{}); ok {
+		if score, ok := scoreVal["score"].(float64); ok {
+			qualityScore = score
+		}
+	}
+
+	w.logger.Info("analysis completed, updating request",
+		"request_id", payload.RequestID,
+		"quality_score", qualityScore,
+	)
+
+	// Get the current request to update it
+	req, err := w.storage.GetRequest(payload.RequestID)
+	if err != nil {
+		w.logger.Error("failed to get request",
+			"request_id", payload.RequestID,
+			"error", err,
+		)
+		// Don't retry if request not found - it may have been deleted
+		if err.Error() == "request not found" {
+			return nil
+		}
+		return fmt.Errorf("failed to get request: %w", err)
+	}
+
+	// Update request metadata with analysis results
+	if req.Metadata == nil {
+		req.Metadata = make(map[string]interface{})
+	}
+
+	// Extract relevant fields from analysis result
+	if tags, ok := result.Result["tags"].([]interface{}); ok {
+		req.Metadata["ai_tags"] = tags
+	}
+	if synopsis, ok := result.Result["synopsis"].(string); ok {
+		req.Metadata["synopsis"] = synopsis
+	}
+	if cleanedText, ok := result.Result["cleaned_text"].(string); ok {
+		req.Metadata["cleaned_text"] = cleanedText
+	}
+	if scoreData, ok := result.Result["quality_score"].(map[string]interface{}); ok {
+		req.Metadata["quality_score"] = scoreData
+	}
+
+	// Apply two-tier tombstoning based on quality score
+	const (
+		SEVERE_QUALITY_THRESHOLD   = 0.25 // Below this: 7-day tombstone + SEOEnabled=false
+		STANDARD_QUALITY_THRESHOLD = 0.35 // Below this: 30-day tombstone + SEOEnabled=true
+	)
+
+	seoEnabledChanged := false
+	if qualityScore > 0 && qualityScore < STANDARD_QUALITY_THRESHOLD {
+		now := time.Now()
+		var tombstoneDate time.Time
+		var seoEnabled bool
+
+		if qualityScore < SEVERE_QUALITY_THRESHOLD {
+			// Severe quality issues: 7-day tombstone, hide from SEO immediately
+			tombstoneDate = now.Add(7 * 24 * time.Hour)
+			seoEnabled = false
+			w.logger.Info("applying severe quality tombstone (7 days, SEO disabled)",
+				"request_id", payload.RequestID,
+				"quality_score", qualityScore,
+			)
+		} else {
+			// Standard quality issues: 30-day tombstone, keep in SEO
+			tombstoneDate = now.Add(30 * 24 * time.Hour)
+			seoEnabled = true
+			w.logger.Info("applying standard quality tombstone (30 days, SEO enabled)",
+				"request_id", payload.RequestID,
+				"quality_score", qualityScore,
+			)
+		}
+
+		req.Metadata["tombstone_datetime"] = tombstoneDate.Format(time.RFC3339)
+		req.Metadata["tombstone_reason"] = fmt.Sprintf("Low quality score: %.2f", qualityScore)
+
+		if req.SEOEnabled != seoEnabled {
+			seoEnabledChanged = true
+			req.SEOEnabled = seoEnabled
+		}
+	}
+
+	// Update the request metadata in database
+	if err := w.storage.UpdateRequestMetadata(payload.RequestID, req.Metadata); err != nil {
+		w.logger.Error("failed to update request metadata",
+			"request_id", payload.RequestID,
+			"error", err,
+		)
+		return fmt.Errorf("failed to update request metadata: %w", err)
+	}
+
+	// Update SEO enabled if it changed
+	if seoEnabledChanged {
+		if err := w.storage.UpdateSEOEnabled(payload.RequestID, req.SEOEnabled); err != nil {
+			w.logger.Error("failed to update SEO enabled",
+				"request_id", payload.RequestID,
+				"error", err,
+			)
+			return fmt.Errorf("failed to update SEO enabled: %w", err)
+		}
+	}
+
+	w.logger.Info("request updated with analysis results",
+		"request_id", payload.RequestID,
+		"quality_score", qualityScore,
+		"seo_enabled", req.SEOEnabled,
+	)
 
 	return nil
 }

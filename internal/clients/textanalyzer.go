@@ -174,6 +174,70 @@ func (c *TextAnalyzerClient) Analyze(ctx context.Context, text string) (*TextAna
 	}, nil
 }
 
+// AnalysisJobResult represents the result of a text analysis job
+type AnalysisJobResult struct {
+	JobID   string                 `json:"job_id"`
+	Status  string                 `json:"status"` // "queued", "processing", "completed", "failed"
+	Message string                 `json:"message,omitempty"`
+	Result  map[string]interface{} `json:"result,omitempty"` // Analysis metadata when completed
+}
+
+// GetAnalysisResult retrieves the result of a previously enqueued analysis job
+func (c *TextAnalyzerClient) GetAnalysisResult(ctx context.Context, jobID string) (*AnalysisJobResult, error) {
+	tracer := otel.Tracer("controller")
+	ctx, span := tracer.Start(ctx, "textanalyzer.GetAnalysisResult")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("textanalyzer.job_id", jobID),
+		attribute.String("http.method", "GET"),
+	)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		fmt.Sprintf("%s/api/jobs/%s", c.baseURL, jobID),
+		nil)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to create request")
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to send request")
+		return nil, fmt.Errorf("failed to send request to text analyzer: %w", err)
+	}
+	defer resp.Body.Close()
+
+	span.SetAttributes(attribute.Int("http.status_code", resp.StatusCode))
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to read response")
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		span.SetStatus(codes.Error, fmt.Sprintf("status %d", resp.StatusCode))
+		return nil, fmt.Errorf("text analyzer service returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result AnalysisJobResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "failed to unmarshal response")
+		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	span.SetAttributes(
+		attribute.String("textanalyzer.status", result.Status),
+	)
+	span.SetStatus(codes.Ok, "success")
+	return &result, nil
+}
+
 // DeleteAnalysis deletes an analysis by ID
 func (c *TextAnalyzerClient) DeleteAnalysis(ctx context.Context, analysisID string) error {
 	tracer := otel.Tracer("controller")

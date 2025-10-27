@@ -192,8 +192,8 @@ func (h *Handler) ServeSitemap(w http.ResponseWriter, r *http.Request) {
 	// Build sitemap entries
 	entries := make([]seo.SitemapEntry, 0)
 	for _, req := range requests {
-		// Skip requests without slugs
-		if req.Slug == nil || *req.Slug == "" {
+		// Skip requests without slugs or with SEO disabled
+		if req.Slug == nil || *req.Slug == "" || !req.SEOEnabled {
 			continue
 		}
 
