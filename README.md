@@ -19,9 +19,9 @@ A central orchestration service that coordinates the scraper and textanalyzer mi
 - Link quality scoring to filter low-quality content
 - Tag-based search with fuzzy matching support
 - Image search across scraped content
-- SQLite storage with audit trails
+- PostgreSQL storage with audit trails
 - UUID tracking for all service calls
-- Designed for PostgreSQL migration
+- Connection pooling and OpenTelemetry instrumentation
 
 ## Requirements
 
@@ -29,7 +29,7 @@ A central orchestration service that coordinates the scraper and textanalyzer mi
 - Running scraper service
 - Running textanalyzer service
 - **Redis 6.0 or higher (for task queue)**
-- SQLite3
+- PostgreSQL 16 or higher
 
 ## Installation
 
@@ -69,11 +69,15 @@ export DATABASE_PATH=./controller.db
 - `TEXTANALYZER_BASE_URL` - TextAnalyzer service URL (default: http://localhost:8082)
 - `SCHEDULER_BASE_URL` - Scheduler service URL (default: http://localhost:8083)
 - `CONTROLLER_PORT` - HTTP server port (default: 8080)
-- `DATABASE_PATH` - SQLite database path (default: ./controller.db)
 - **`REDIS_ADDR` - Redis server address (default: localhost:6379)**
 - **`WORKER_CONCURRENCY` - Number of concurrent queue workers (default: 10)**
 - `LINK_SCORE_THRESHOLD` - Minimum link quality score 0.0-1.0 (default: 0.5)
 - `WEB_INTERFACE_URL` - Web interface URL for SEO links (default: http://localhost:5173)
+- `DB_HOST` - PostgreSQL host (default: postgres)
+- `DB_PORT` - PostgreSQL port (default: 5432)
+- `DB_USER` - Database user (default: docutab)
+- `DB_PASSWORD` - Database password
+- `DB_NAME` - Database name (default: docutab)
 
 ## Quick Examples
 
@@ -298,6 +302,8 @@ controller/
 
 ## Database
 
+PostgreSQL database with automatic schema migrations via `internal/storage/migrations.go`.
+
 ### Schema
 
 **requests table:**
@@ -314,7 +320,7 @@ controller/
 - `seo_enabled` - Boolean flag for SEO page generation
 
 **tags table:**
-- `id` - Auto-increment primary key
+- `id` - Serial primary key
 - `request_id` - Foreign key to requests.id
 - `tag` - Individual tag value
 
@@ -331,39 +337,7 @@ controller/
 - `result_request_id` - Foreign key to requests.id (result)
 - `asynq_task_id` - Asynq task ID for correlation
 
-### Migrations
-
-The database schema is managed through a migration system in `internal/storage/migrations.go`.
-
-To add a new migration:
-1. Add a new Migration struct to the migrations slice
-2. Increment the version number
-3. Provide SQL statement
-4. Restart the service
-
-### Switching to PostgreSQL
-
-To use PostgreSQL instead of SQLite:
-
-1. Update `internal/storage/storage.go`:
-   ```go
-   import _ "github.com/lib/pq"
-
-   func New(connectionString string) (*Storage, error) {
-       db, err := sql.Open("postgres", connectionString)
-       // ... rest remains the same
-   }
-   ```
-
-2. Update migrations:
-   - `AUTOINCREMENT` → `SERIAL`
-   - `DATETIME` → `TIMESTAMP`
-
-3. Use PostgreSQL connection string:
-   ```bash
-   export DATABASE_PATH="postgres://user:pass@localhost:5432/controller?sslmode=disable"
-   ./controller
-   ```
+The shared database package (`pkg/database`) provides connection pooling, OpenTelemetry instrumentation, and automatic retry logic.
 
 ## Performance Considerations
 
