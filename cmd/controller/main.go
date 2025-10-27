@@ -294,22 +294,24 @@ func main() {
 	mux.HandleFunc("/images-sitemap.xml", handler.ServeImageSitemap) // XML image sitemap
 	mux.HandleFunc("/robots.txt", handler.ServeRobotsTxt)        // Robots.txt for crawlers
 
-	// Setup server with middleware chain: CORS -> HTTP logging -> metrics -> tracing -> handlers
+	// Setup server with middleware chain (applied bottom-up, executes top-down):
+	// Execution order: CORS -> tracing -> metrics -> logging -> handlers
+	// This ensures tracing creates span BEFORE logging tries to read trace context
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	var httpHandler http.Handler = mux
 
-	// Wrap with tracing middleware if initialized
-	if tp != nil {
-		httpHandler = tracing.HTTPMiddleware("docutab-controller")(httpHandler)
-	}
+	// Add HTTP request logging (innermost, executes last)
+	httpHandler = logging.HTTPLoggingMiddleware(logger)(httpHandler)
 
 	// Add HTTP metrics middleware
 	httpHandler = metrics.HTTPMiddleware("controller")(httpHandler)
 
-	// Add HTTP request logging
-	httpHandler = logging.HTTPLoggingMiddleware(logger)(httpHandler)
+	// Wrap with tracing middleware if initialized (executes early to create span)
+	if tp != nil {
+		httpHandler = tracing.HTTPMiddleware("docutab-controller")(httpHandler)
+	}
 
-	// Apply CORS middleware
+	// Apply CORS middleware (outermost, executes first)
 	httpHandler = corsMiddleware(httpHandler)
 
 	server := &http.Server{
