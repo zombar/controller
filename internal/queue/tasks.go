@@ -219,19 +219,10 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 		}
 	}
 
-	// Extract images from scraper metadata for textanalyzer
-	var images []string
-	if scrapeResp.Metadata != nil {
-		if imgList, ok := scrapeResp.Metadata["images"].([]interface{}); ok {
-			images = make([]string, 0, len(imgList))
-			for _, img := range imgList {
-				if imgStr, ok := img.(string); ok {
-					images = append(images, imgStr)
-				}
-			}
-		} else if imgList, ok := scrapeResp.Metadata["images"].([]string); ok {
-			images = imgList
-		}
+	// Extract image URLs from scraper response for textanalyzer
+	images := make([]string, 0, len(scrapeResp.Images))
+	for _, img := range scrapeResp.Images {
+		images = append(images, img.URL)
 	}
 
 	// Enqueue text analysis (skip for image URLs)
@@ -250,7 +241,8 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 			log.Printf("Warning: failed to enqueue text analysis for %s: %v", url, err)
 		} else {
 			textAnalyzerJobID = jobID
-			log.Printf("Enqueued text analysis job %s for %s (with compressed HTML: %v)", jobID, url, compressedRawText != "")
+			log.Printf("Enqueued text analysis job %s for %s (images: %d, compressed HTML: %v)",
+				jobID, url, len(images), compressedRawText != "")
 		}
 	}
 

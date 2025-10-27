@@ -33,6 +33,7 @@ type ScraperResponse struct {
 	Title    string                 `json:"title"`
 	Content  string                 `json:"content"`       // AI-cleaned content
 	RawText  string                 `json:"raw_text"`      // Original raw text extracted from HTML
+	Images   []ImageInfo            `json:"images,omitempty"` // Images extracted from the page
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 	Score    *LinkScore             `json:"score,omitempty"` // Quality score for the URL
 	Slug     string                 `json:"slug,omitempty"`  // SEO-friendly URL slug
