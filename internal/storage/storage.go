@@ -871,6 +871,46 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 		}
 	}
 
+	// Check if tags contain 'low-quality' or 'sparse-content' and apply 90-day tombstone
+	hasLowQuality := false
+	for _, tag := range tags {
+		if tag == "low-quality" || tag == "sparse-content" {
+			hasLowQuality = true
+			break
+		}
+	}
+
+	if hasLowQuality {
+		// Fetch current metadata
+		var metadataJSON string
+		err := tx.QueryRow("SELECT metadata_json FROM requests WHERE id = ?", id).Scan(&metadataJSON)
+		if err != nil {
+			return fmt.Errorf("failed to fetch metadata: %w", err)
+		}
+
+		var metadata map[string]interface{}
+		if err := json.Unmarshal([]byte(metadataJSON), &metadata); err != nil {
+			return fmt.Errorf("failed to unmarshal metadata: %w", err)
+		}
+
+		// Add 90-day tombstone
+		tombstoneTime := time.Now().UTC().Add(90 * 24 * time.Hour)
+		metadata["tombstone_datetime"] = tombstoneTime.Format(time.RFC3339)
+		metadata["tombstone_reason"] = "auto-tombstone: low-quality or sparse-content tag"
+
+		// Marshal updated metadata
+		updatedMetadataJSON, err := json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal updated metadata: %w", err)
+		}
+
+		// Update metadata in database
+		_, err = tx.Exec("UPDATE requests SET metadata_json = ? WHERE id = ?", string(updatedMetadataJSON), id)
+		if err != nil {
+			return fmt.Errorf("failed to update metadata with tombstone: %w", err)
+		}
+	}
+
 	// Commit transaction
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)

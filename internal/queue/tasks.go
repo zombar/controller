@@ -149,7 +149,7 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 	// Check score threshold (skip for image URLs)
 	if !isImageURL && scoreResp.Score.Score < w.linkScoreThreshold {
 		// Save a tombstoned record for low-quality content
-		tombstoneTime := time.Now().UTC().Add(72 * time.Hour) // Tombstone in 3 days
+		tombstoneTime := time.Now().UTC().Add(30 * 24 * time.Hour) // Tombstone in 30 days
 		requestID := uuid.New().String()
 
 		// Add domain name to tags, normalizing categories

@@ -17,6 +17,7 @@ import (
 	"github.com/zombar/controller/internal/scraper_requests"
 	internalslug "github.com/zombar/controller/internal/slug"
 	"github.com/zombar/controller/internal/storage"
+	"github.com/zombar/purpletab/pkg/metrics"
 )
 
 // Handler contains all HTTP handlers
@@ -30,11 +31,15 @@ type Handler struct {
 	queueClient        *queue.Client
 	webInterfaceURL    string
 	scraperBaseURL     string
+	businessMetrics    *metrics.BusinessMetrics
 }
 
 // New creates a new Handler
 func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *clients.TextAnalyzerClient, scheduler *clients.SchedulerClient, queueClient *queue.Client, linkScoreThreshold float64, webInterfaceURL string, scraperBaseURL string) *Handler {
-	return &Handler{
+	// Initialize business metrics
+	businessMetrics := metrics.NewBusinessMetrics("controller")
+
+	h := &Handler{
 		storage:            store,
 		scraper:            scraper,
 		textAnalyzer:       textAnalyzer,
@@ -44,6 +49,43 @@ func New(store *storage.Storage, scraper *clients.ScraperClient, textAnalyzer *c
 		queueClient:        queueClient,
 		webInterfaceURL:    webInterfaceURL,
 		scraperBaseURL:     scraperBaseURL,
+		businessMetrics:    businessMetrics,
+	}
+
+	// Start periodic metrics updater for gauges
+	go h.startMetricsUpdater()
+
+	return h
+}
+
+// startMetricsUpdater periodically updates gauge metrics
+func (h *Handler) startMetricsUpdater() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		h.updateMetrics()
+	}
+}
+
+// updateMetrics updates gauge metrics for queue and job status
+func (h *Handler) updateMetrics() {
+	// Update queue length (if queue client is available)
+	if h.queueClient != nil {
+		// Note: Asynq doesn't provide a simple way to get queue length
+		// This would require implementing a custom inspector
+		// For now, we'll skip this metric
+	}
+
+	// Update job status counts
+	statuses := []string{"pending", "processing", "completed", "failed", "queued"}
+	for _, status := range statuses {
+		count, err := h.storage.CountScrapeJobsByStatus(status)
+		if err != nil {
+			log.Printf("Failed to count jobs by status %s: %v", status, err)
+			continue
+		}
+		h.businessMetrics.ScrapeJobsByStatus.WithLabelValues(status).Set(float64(count))
 	}
 }
 
@@ -135,7 +177,7 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 	// Check if score meets threshold (skip for image URLs)
 	if !isImageURL && scoreResp.Score.Score < h.linkScoreThreshold {
 		// Score is below threshold - mark for tombstoning and return scoring metadata only
-		tombstoneTime := time.Now().UTC().Add(72 * time.Hour) // Tombstone in 3 days
+		tombstoneTime := time.Now().UTC().Add(30 * 24 * time.Hour) // Tombstone in 30 days
 
 		// Add domain name to tags
 		tags := scoreResp.Score.Categories
@@ -1179,6 +1221,9 @@ func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Record scrape request received
+	h.businessMetrics.ScrapeRequestsTotal.WithLabelValues("accepted").Inc()
+
 	// Create scrape job in database
 	jobID := uuid.New().String()
 	job := &storage.ScrapeJob{
@@ -1191,9 +1236,13 @@ func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.storage.SaveScrapeJob(job); err != nil {
+		h.businessMetrics.ScrapeRequestsTotal.WithLabelValues("error").Inc()
 		respondError(w, fmt.Sprintf("Failed to create scrape job: %v", err), http.StatusInternalServerError)
 		return
 	}
+
+	// Record scrape job created (parent job)
+	h.businessMetrics.ScrapeJobsTotal.WithLabelValues("parent").Inc()
 
 	// Enqueue task to Asynq (skip if queueClient is nil for testing)
 	var taskID string
@@ -1282,6 +1331,7 @@ func (h *Handler) ListScrapeRequests(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetScrapeRequest returns a specific scrape request by ID
+// Checks both in-memory text analysis requests and database scrape jobs
 func (h *Handler) GetScrapeRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -1294,6 +1344,13 @@ func (h *Handler) GetScrapeRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// First check in-memory manager for text analysis requests
+	if req, ok := h.scrapeRequests.Get(id); ok {
+		respondJSON(w, req, http.StatusOK)
+		return
+	}
+
+	// If not found in memory, check database for scrape jobs
 	job, err := h.storage.GetScrapeJob(id)
 	if err != nil {
 		respondError(w, fmt.Sprintf("Failed to get scrape job: %v", err), http.StatusInternalServerError)
