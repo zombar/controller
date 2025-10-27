@@ -1,7 +1,10 @@
 package queue
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -14,6 +17,7 @@ import (
 	"github.com/zombar/controller/internal/clients"
 	internalslug "github.com/zombar/controller/internal/slug"
 	"github.com/zombar/controller/internal/storage"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 )
@@ -31,19 +35,70 @@ func (w *Worker) handleScrapeTask(ctx context.Context, t *asynq.Task) error {
 	url := payload.URL
 	extractLinks := payload.ExtractLinks
 
+	// Calculate queue wait time
+	var queueWaitTime time.Duration
+	if payload.EnqueuedAt > 0 {
+		enqueuedTime := time.Unix(0, payload.EnqueuedAt)
+		queueWaitTime = time.Since(enqueuedTime)
+	}
+
 	w.logger.Info("processing scrape task",
 		"job_id", jobID,
 		"url", url,
 		"extract_links", extractLinks,
+		"queue_wait_seconds", queueWaitTime.Seconds(),
 	)
 
-	// Add tracing if available
-	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
-		span.SetAttributes(
-			attribute.String("job.id", jobID),
-			attribute.String("job.url", url),
-			attribute.Bool("job.extract_links", extractLinks),
-		)
+	// Recreate trace context from payload if available
+	var span trace.Span
+	if payload.TraceID != "" && payload.SpanID != "" {
+		// Parse trace ID and span ID from hex strings
+		traceID, err := trace.TraceIDFromHex(payload.TraceID)
+		if err == nil {
+			spanID, err := trace.SpanIDFromHex(payload.SpanID)
+			if err == nil {
+				// Create span context from stored IDs
+				remoteSpanCtx := trace.NewSpanContext(trace.SpanContextConfig{
+					TraceID:    traceID,
+					SpanID:     spanID,
+					TraceFlags: trace.FlagsSampled,
+					Remote:     true,
+				})
+
+				// Create new context with the remote span context
+				ctx = trace.ContextWithRemoteSpanContext(ctx, remoteSpanCtx)
+
+				// Start a new span linked to the enqueue span
+				ctx, span = otel.Tracer("controller").Start(ctx, "asynq.task.process",
+					trace.WithSpanKind(trace.SpanKindConsumer),
+					trace.WithAttributes(
+						attribute.String("task.type", TypeScrapeURL),
+						attribute.String("task.id", jobID),
+						attribute.String("job.id", jobID),
+						attribute.String("job.url", url),
+						attribute.Bool("job.extract_links", extractLinks),
+						attribute.Float64("queue.wait_time_seconds", queueWaitTime.Seconds()),
+						attribute.Int64("enqueued_at", payload.EnqueuedAt),
+					),
+				)
+				defer span.End()
+
+				// Record queue wait time event
+				span.AddEvent("task_processing_started", trace.WithAttributes(
+					attribute.Float64("wait_time_seconds", queueWaitTime.Seconds()),
+				))
+			}
+		}
+	} else {
+		// No trace context in payload, check current context
+		if existingSpan := trace.SpanFromContext(ctx); existingSpan.SpanContext().IsValid() {
+			existingSpan.SetAttributes(
+				attribute.String("job.id", jobID),
+				attribute.String("job.url", url),
+				attribute.Bool("job.extract_links", extractLinks),
+				attribute.Float64("queue.wait_time_seconds", queueWaitTime.Seconds()),
+			)
+		}
 	}
 
 	// Update job status to processing
@@ -164,20 +219,47 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 		}
 	}
 
-	// Analyze the content (skip for image URLs)
-	var analyzeResp *clients.TextAnalyzerResponse
+	// Extract images from scraper metadata for textanalyzer
+	var images []string
+	if scrapeResp.Metadata != nil {
+		if imgList, ok := scrapeResp.Metadata["images"].([]interface{}); ok {
+			images = make([]string, 0, len(imgList))
+			for _, img := range imgList {
+				if imgStr, ok := img.(string); ok {
+					images = append(images, imgStr)
+				}
+			}
+		} else if imgList, ok := scrapeResp.Metadata["images"].([]string); ok {
+			images = imgList
+		}
+	}
+
+	// Enqueue text analysis (skip for image URLs)
+	var textAnalyzerJobID string
 	if !isImageURL {
-		analyzeResp, err = w.textAnalyzerClient.Analyze(ctx, scrapeResp.Content)
+		// Compress the raw text for storage and AI enrichment
+		compressedRawText, err := compressHTML(scrapeResp.RawText)
 		if err != nil {
-			return fmt.Errorf("failed to analyze: %w", err)
+			log.Printf("Warning: failed to compress raw text for %s: %v", url, err)
+			compressedRawText = "" // Continue without compressed HTML
+		}
+
+		jobID, err := w.textAnalyzerClient.EnqueueAnalysis(ctx, scrapeResp.Content, compressedRawText, images)
+		if err != nil {
+			// Log error but don't fail the scrape - analysis can be retried later
+			log.Printf("Warning: failed to enqueue text analysis for %s: %v", url, err)
+		} else {
+			textAnalyzerJobID = jobID
+			log.Printf("Enqueued text analysis job %s for %s (with compressed HTML: %v)", jobID, url, compressedRawText != "")
 		}
 	}
 
 	// Combine metadata
 	combinedMetadata := make(map[string]interface{})
 	combinedMetadata["scraper_metadata"] = scraperMetadata
-	if analyzeResp != nil {
-		combinedMetadata["analyzer_metadata"] = analyzeResp.Metadata
+	if textAnalyzerJobID != "" {
+		combinedMetadata["textanalyzer_job_id"] = textAnalyzerJobID
+		combinedMetadata["textanalyzer_status"] = "queued"
 	}
 
 	// Add link score
@@ -202,19 +284,18 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 	// Save to database
 	requestID := uuid.New().String()
 
-	// Get tags and analyzer UUID
+	// Get initial tags from link score categories (normalized)
+	// Analyzer tags will be added later when textanalyzer completes
 	var tags []string
-	var analyzerUUID string
-	if analyzeResp != nil {
-		tags = analyzeResp.GetTags()
-		analyzerUUID = analyzeResp.ID
-	} else {
-		// For image URLs, use categories from link score as tags (normalized)
-		if scrapeResp.Score != nil {
-			tags = make([]string, 0, len(scrapeResp.Score.Categories))
-			for _, cat := range scrapeResp.Score.Categories {
-				tags = append(tags, clients.NormalizeTag(cat))
-			}
+	if scrapeResp.Score != nil {
+		tags = make([]string, 0, len(scrapeResp.Score.Categories))
+		for _, cat := range scrapeResp.Score.Categories {
+			tags = append(tags, clients.NormalizeTag(cat))
+		}
+	} else if scoreResp != nil {
+		tags = make([]string, 0, len(scoreResp.Score.Categories))
+		for _, cat := range scoreResp.Score.Categories {
+			tags = append(tags, clients.NormalizeTag(cat))
 		}
 	}
 
@@ -246,7 +327,7 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 		SourceType:       "url",
 		SourceURL:        &url,
 		ScraperUUID:      &scrapeResp.ID,
-		TextAnalyzerUUID: analyzerUUID,
+		TextAnalyzerUUID: textAnalyzerJobID, // Store the job ID for async tracking
 		Tags:             tags,
 		Metadata:         combinedMetadata,
 		Slug:             slug,
@@ -355,21 +436,8 @@ func (w *Worker) extractAndQueueLinks(ctx context.Context, parentJobID, sourceUR
 		log.Printf("Filtered out %d non-scrapable URLs from %s", skippedCount, sourceURL)
 	}
 
-	// Limit to top 10 by length
+	// Process all extracted links (no limit)
 	links := scrapableLinks
-	if len(links) > 10 {
-		// Sort by length descending and take top 10
-		sortedLinks := make([]string, len(links))
-		copy(sortedLinks, links)
-		for i := 0; i < len(sortedLinks); i++ {
-			for j := i + 1; j < len(sortedLinks); j++ {
-				if len(sortedLinks[j]) > len(sortedLinks[i]) {
-					sortedLinks[i], sortedLinks[j] = sortedLinks[j], sortedLinks[i]
-				}
-			}
-		}
-		links = sortedLinks[:10]
-	}
 
 	log.Printf("Queueing %d extracted links for scraping (child depth: %d)", len(links), parentDepth+1)
 
@@ -421,11 +489,70 @@ func (w *Worker) handleExtractLinksTask(ctx context.Context, t *asynq.Task) erro
 		return fmt.Errorf("invalid task payload: %w", err)
 	}
 
+	// Calculate queue wait time
+	var queueWaitTime time.Duration
+	if payload.EnqueuedAt > 0 {
+		enqueuedTime := time.Unix(0, payload.EnqueuedAt)
+		queueWaitTime = time.Since(enqueuedTime)
+	}
+
 	w.logger.Info("processing extract links task",
 		"parent_job_id", payload.ParentJobID,
 		"source_url", payload.SourceURL,
 		"parent_depth", payload.ParentDepth,
+		"queue_wait_seconds", queueWaitTime.Seconds(),
 	)
+
+	// Recreate trace context from payload if available
+	var span trace.Span
+	if payload.TraceID != "" && payload.SpanID != "" {
+		// Parse trace ID and span ID from hex strings
+		traceID, err := trace.TraceIDFromHex(payload.TraceID)
+		if err == nil {
+			spanID, err := trace.SpanIDFromHex(payload.SpanID)
+			if err == nil {
+				// Create span context from stored IDs
+				remoteSpanCtx := trace.NewSpanContext(trace.SpanContextConfig{
+					TraceID:    traceID,
+					SpanID:     spanID,
+					TraceFlags: trace.FlagsSampled,
+					Remote:     true,
+				})
+
+				// Create new context with the remote span context
+				ctx = trace.ContextWithRemoteSpanContext(ctx, remoteSpanCtx)
+
+				// Start a new span linked to the enqueue span
+				ctx, span = otel.Tracer("controller").Start(ctx, "asynq.task.process",
+					trace.WithSpanKind(trace.SpanKindConsumer),
+					trace.WithAttributes(
+						attribute.String("task.type", TypeExtractLinks),
+						attribute.String("parent_job_id", payload.ParentJobID),
+						attribute.String("source_url", payload.SourceURL),
+						attribute.Int("parent_depth", payload.ParentDepth),
+						attribute.Float64("queue.wait_time_seconds", queueWaitTime.Seconds()),
+						attribute.Int64("enqueued_at", payload.EnqueuedAt),
+					),
+				)
+				defer span.End()
+
+				// Record queue wait time event
+				span.AddEvent("task_processing_started", trace.WithAttributes(
+					attribute.Float64("wait_time_seconds", queueWaitTime.Seconds()),
+				))
+			}
+		}
+	} else {
+		// No trace context in payload, check current context
+		if existingSpan := trace.SpanFromContext(ctx); existingSpan.SpanContext().IsValid() {
+			existingSpan.SetAttributes(
+				attribute.String("parent_job_id", payload.ParentJobID),
+				attribute.String("source_url", payload.SourceURL),
+				attribute.Int("parent_depth", payload.ParentDepth),
+				attribute.Float64("queue.wait_time_seconds", queueWaitTime.Seconds()),
+			)
+		}
+	}
 
 	// Extract and queue links - this runs in its own task with its own context
 	w.extractAndQueueLinks(ctx, payload.ParentJobID, payload.SourceURL, payload.ParentDepth)
@@ -445,4 +572,24 @@ func extractDomainTag(rawURL string) string {
 	domain = strings.TrimPrefix(domain, "www.")
 
 	return domain
+}
+
+// compressHTML compresses and base64 encodes HTML text
+func compressHTML(html string) (string, error) {
+	if html == "" {
+		return "", nil
+	}
+
+	var buf bytes.Buffer
+	gzWriter := gzip.NewWriter(&buf)
+
+	if _, err := gzWriter.Write([]byte(html)); err != nil {
+		return "", fmt.Errorf("failed to write to gzip: %w", err)
+	}
+
+	if err := gzWriter.Close(); err != nil {
+		return "", fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+
+	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }
