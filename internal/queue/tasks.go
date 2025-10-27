@@ -374,9 +374,9 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 			log.Printf("Failed to get job for link extraction: %v", err)
 		} else if job != nil && job.Depth < w.maxLinkDepth {
 			log.Printf("Queueing link extraction task for %s (depth: %d/%d)", url, job.Depth, w.maxLinkDepth)
-			// Enqueue link extraction as a separate task to avoid context cancellation issues
+			// Enqueue link extraction as a separate task, preserving trace context
 			if w.queueClient != nil {
-				_, err := w.queueClient.EnqueueExtractLinks(context.Background(), jobID, url, job.Depth)
+				_, err := w.queueClient.EnqueueExtractLinks(ctx, jobID, url, job.Depth)
 				if err != nil {
 					log.Printf("Failed to enqueue extract links task for %s: %v", url, err)
 				}
@@ -594,12 +594,71 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 	enqueuedTime := time.Unix(0, payload.EnqueuedAt)
 	elapsedMinutes := time.Since(enqueuedTime).Minutes()
 
+	// Calculate queue wait time
+	var queueWaitTime time.Duration
+	if payload.EnqueuedAt > 0 {
+		enqueuedTime := time.Unix(0, payload.EnqueuedAt)
+		queueWaitTime = time.Since(enqueuedTime)
+	}
+
 	w.logger.Info("retrieving text analysis results",
 		"request_id", payload.RequestID,
 		"analysis_job_id", payload.AnalysisJobID,
 		"attempt", payload.AttemptCount,
 		"elapsed_minutes", int(elapsedMinutes),
+		"queue_wait_seconds", queueWaitTime.Seconds(),
 	)
+
+	// Recreate trace context from payload if available
+	var span trace.Span
+	if payload.TraceID != "" && payload.SpanID != "" {
+		// Parse trace ID and span ID from hex strings
+		traceID, err := trace.TraceIDFromHex(payload.TraceID)
+		if err == nil {
+			spanID, err := trace.SpanIDFromHex(payload.SpanID)
+			if err == nil {
+				// Create span context from stored IDs
+				remoteSpanCtx := trace.NewSpanContext(trace.SpanContextConfig{
+					TraceID:    traceID,
+					SpanID:     spanID,
+					TraceFlags: trace.FlagsSampled,
+					Remote:     true,
+				})
+
+				// Create new context with the remote span context
+				ctx = trace.ContextWithRemoteSpanContext(ctx, remoteSpanCtx)
+
+				// Start a new span linked to the enqueue span
+				ctx, span = otel.Tracer("controller").Start(ctx, "asynq.task.process",
+					trace.WithSpanKind(trace.SpanKindConsumer),
+					trace.WithAttributes(
+						attribute.String("task.type", TypeRetrieveAnalysis),
+						attribute.String("request_id", payload.RequestID),
+						attribute.String("analysis_job_id", payload.AnalysisJobID),
+						attribute.Int("attempt_count", payload.AttemptCount),
+						attribute.Float64("queue.wait_time_seconds", queueWaitTime.Seconds()),
+						attribute.Int64("enqueued_at", payload.EnqueuedAt),
+					),
+				)
+				defer span.End()
+
+				// Record queue wait time event
+				span.AddEvent("task_processing_started", trace.WithAttributes(
+					attribute.Float64("wait_time_seconds", queueWaitTime.Seconds()),
+				))
+			}
+		}
+	} else {
+		// No trace context in payload, check current context
+		if existingSpan := trace.SpanFromContext(ctx); existingSpan.SpanContext().IsValid() {
+			existingSpan.SetAttributes(
+				attribute.String("request_id", payload.RequestID),
+				attribute.String("analysis_job_id", payload.AnalysisJobID),
+				attribute.Int("attempt_count", payload.AttemptCount),
+				attribute.Float64("queue.wait_time_seconds", queueWaitTime.Seconds()),
+			)
+		}
+	}
 
 	// If we've been retrying for too long, give up gracefully to prevent indefinite waiting
 	// This timeout is configurable (default 60 minutes for production, can be set to 2 for tests)
