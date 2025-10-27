@@ -590,11 +590,38 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 		return fmt.Errorf("invalid task payload: %w", err)
 	}
 
+	// Calculate elapsed time since task was enqueued
+	enqueuedTime := time.Unix(0, payload.EnqueuedAt)
+	elapsedMinutes := time.Since(enqueuedTime).Minutes()
+
 	w.logger.Info("retrieving text analysis results",
 		"request_id", payload.RequestID,
 		"analysis_job_id", payload.AnalysisJobID,
 		"attempt", payload.AttemptCount,
+		"elapsed_minutes", int(elapsedMinutes),
 	)
+
+	// If we've been retrying for too long, give up gracefully to prevent indefinite waiting
+	// This timeout is configurable (default 60 minutes for production, can be set to 2 for tests)
+	if w.maxAnalysisWaitMinutes > 0 && elapsedMinutes > float64(w.maxAnalysisWaitMinutes) {
+		w.logger.Warn("giving up on analysis retrieval after timeout",
+			"analysis_job_id", payload.AnalysisJobID,
+			"request_id", payload.RequestID,
+			"elapsed_minutes", int(elapsedMinutes),
+			"max_wait_minutes", w.maxAnalysisWaitMinutes,
+		)
+		// Update request metadata to indicate analysis timed out
+		req, err := w.storage.GetRequest(payload.RequestID)
+		if err == nil {
+			if req.Metadata == nil {
+				req.Metadata = make(map[string]interface{})
+			}
+			req.Metadata["analysis_retrieval_timeout"] = true
+			req.Metadata["analysis_retrieval_elapsed_minutes"] = int(elapsedMinutes)
+			w.storage.UpdateRequestMetadata(payload.RequestID, req.Metadata)
+		}
+		return nil // Return success to stop retrying
+	}
 
 	// Retrieve analysis result from TextAnalyzer service
 	result, err := w.textAnalyzerClient.GetAnalysisResult(ctx, payload.AnalysisJobID)
@@ -603,7 +630,7 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 			"analysis_job_id", payload.AnalysisJobID,
 			"error", err,
 		)
-		// Return error to trigger retry
+		// Return error to trigger retry (will be checked against timeout on next attempt)
 		return fmt.Errorf("failed to retrieve analysis result: %w", err)
 	}
 
@@ -617,6 +644,7 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 		w.logger.Info("analysis not yet completed, will retry later",
 			"analysis_job_id", payload.AnalysisJobID,
 			"status", result.Status,
+			"elapsed_minutes", int(elapsedMinutes),
 		)
 		return fmt.Errorf("analysis not completed (status: %s)", result.Status)
 	}

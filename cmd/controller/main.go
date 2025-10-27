@@ -157,6 +157,7 @@ func main() {
 			LinkScoreThreshold:      cfg.LinkScoreThreshold,
 			MaxLinkDepth:            cfg.MaxLinkDepth,
 			TombstonePeriodLowScore: cfg.TombstonePeriodLowScore,
+			MaxAnalysisWaitMinutes:  cfg.MaxAnalysisWaitMinutes,
 		},
 		store,
 		scraperClient,
@@ -165,7 +166,11 @@ func main() {
 		urlCache,
 		handler.GetBusinessMetrics(), // Pass business metrics to worker
 	)
-	logger.Info("queue worker initialized", "concurrency", cfg.WorkerConcurrency, "max_link_depth", cfg.MaxLinkDepth)
+	logger.Info("queue worker initialized",
+		"concurrency", cfg.WorkerConcurrency,
+		"max_link_depth", cfg.MaxLinkDepth,
+		"max_analysis_wait_minutes", cfg.MaxAnalysisWaitMinutes,
+	)
 
 	// Start worker in background
 	go func() {

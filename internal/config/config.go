@@ -21,9 +21,10 @@ type Config struct {
 	LinkScoreThreshold  float64 // Minimum score for link recommendation (0.0-1.0)
 	GenerateMockData    bool    // Generate 6 months of mock historical data on startup (~600 documents)
 	WebInterfaceURL     string  // URL for the web interface (for footer links on static pages)
-	RedisAddr           string  // Redis address for queue backend
-	WorkerConcurrency   int     // Number of concurrent workers for processing tasks
-	MaxLinkDepth        int     // Maximum depth for link extraction (0 = no links, 1 = extract only from root URL)
+	RedisAddr              string // Redis address for queue backend
+	WorkerConcurrency      int    // Number of concurrent workers for processing tasks
+	MaxLinkDepth           int    // Maximum depth for link extraction (0 = no links, 1 = extract only from root URL)
+	MaxAnalysisWaitMinutes int    // Maximum minutes to wait for analysis retrieval (0 = use default 60, can be set to 2 for tests)
 
 	// Tombstone configuration
 	TombstoneTags           []string // Tags that trigger auto-tombstone (default: low-quality,sparse-content)
@@ -46,10 +47,11 @@ func Load() (*Config, error) {
 		DBName:              getEnv("DB_NAME", "docutab"),
 		LinkScoreThreshold:  getEnvAsFloat("LINK_SCORE_THRESHOLD", 0.5),
 		GenerateMockData:    getEnvAsBool("GENERATE_MOCK_DATA", false),
-		WebInterfaceURL:     getEnv("WEB_INTERFACE_URL", "http://localhost:5173"),
-		RedisAddr:           getEnv("REDIS_ADDR", "localhost:6379"),
-		WorkerConcurrency:   getEnvAsInt("WORKER_CONCURRENCY", 10),
-		MaxLinkDepth:        getEnvAsInt("MAX_LINK_DEPTH", 1),
+		WebInterfaceURL:        getEnv("WEB_INTERFACE_URL", "http://localhost:5173"),
+		RedisAddr:              getEnv("REDIS_ADDR", "localhost:6379"),
+		WorkerConcurrency:      getEnvAsInt("WORKER_CONCURRENCY", 10),
+		MaxLinkDepth:           getEnvAsInt("MAX_LINK_DEPTH", 1),
+		MaxAnalysisWaitMinutes: getEnvAsInt("MAX_ANALYSIS_WAIT_MINUTES", 0), // 0 = use worker default (60)
 
 		// Tombstone configuration
 		TombstoneTags:           getEnvAsStringSlice("TOMBSTONE_TAGS", []string{"low-quality", "sparse-content"}),

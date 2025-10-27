@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
@@ -12,6 +13,15 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
+
+// getTestRedisAddr returns the Redis address for tests
+// Checks TEST_REDIS_ADDR env var first, falls back to localhost:6379
+func getTestRedisAddr() string {
+	if addr := os.Getenv("TEST_REDIS_ADDR"); addr != "" {
+		return addr
+	}
+	return "localhost:6379"
+}
 
 // TestE2ETraceFlow_ScrapeRequest tests the complete trace flow from enqueue to worker processing
 func TestE2ETraceFlow_ScrapeRequest(t *testing.T) {
@@ -278,8 +288,10 @@ func TestE2ETraceFlowWithRealAsynq(t *testing.T) {
 	)
 	otel.SetTracerProvider(tp)
 
-	// Setup Asynq client
-	redisAddr := "localhost:6379"
+	// Setup Asynq client - use test Redis if available, otherwise default
+	redisAddr := getTestRedisAddr()
+	t.Logf("Attempting to connect to Redis at %s", redisAddr)
+
 	client := asynq.NewClient(asynq.RedisClientOpt{Addr: redisAddr})
 	defer client.Close()
 

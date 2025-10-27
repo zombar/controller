@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -36,8 +37,10 @@ func setupTestDB(t *testing.T, testName string) (connStr string, cleanup func())
 	}
 	defer adminDB.Close()
 
-	// Test connection
-	if err := adminDB.Ping(); err != nil {
+	// Test connection with timeout to prevent hanging on DNS issues
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := adminDB.PingContext(ctx); err != nil {
 		t.Skipf("Could not ping PostgreSQL for testing: %v", err)
 		return "", func() {}
 	}

@@ -65,6 +65,7 @@ type Worker struct {
 	maxLinkDepth            int
 	urlCache                URLCache
 	tombstonePeriodLowScore int // Days until deletion for low-score URLs
+	maxAnalysisWaitMinutes  int // Maximum minutes to wait for analysis retrieval before giving up
 	businessMetrics         *metrics.BusinessMetrics
 }
 
@@ -75,6 +76,7 @@ type WorkerConfig struct {
 	LinkScoreThreshold      float64
 	MaxLinkDepth            int
 	TombstonePeriodLowScore int // Days until deletion for low-score URLs
+	MaxAnalysisWaitMinutes  int // Maximum minutes to wait for analysis retrieval (0 = unlimited, default 60)
 }
 
 // NewWorker creates a new queue worker
@@ -146,6 +148,12 @@ func NewWorker(
 	server := asynq.NewServer(redisOpt, serverCfg)
 	mux := asynq.NewServeMux()
 
+	// Set default for max analysis wait time if not specified
+	maxAnalysisWait := cfg.MaxAnalysisWaitMinutes
+	if maxAnalysisWait == 0 {
+		maxAnalysisWait = 60 // Default: 60 minutes for production
+	}
+
 	w := &Worker{
 		server:                  server,
 		mux:                     mux,
@@ -159,6 +167,7 @@ func NewWorker(
 		maxLinkDepth:            cfg.MaxLinkDepth,
 		urlCache:                urlCache,
 		tombstonePeriodLowScore: cfg.TombstonePeriodLowScore,
+		maxAnalysisWaitMinutes:  maxAnalysisWait,
 		businessMetrics:         businessMetrics,
 	}
 

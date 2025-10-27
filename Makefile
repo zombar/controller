@@ -17,14 +17,15 @@ help: ## Display this help message
 	@echo "  build-all       - Build for multiple platforms"
 	@echo ""
 	@echo "Test commands:"
-	@echo "  test            - Run all tests"
-	@echo "  test-short      - Run only fast tests"
-	@echo "  test-coverage   - Run tests with coverage report"
-	@echo "  test-seo        - Run only SEO-related tests"
-	@echo "  test-trace      - Run only trace propagation tests"
-	@echo "  test-trace-e2e  - Run E2E trace flow tests"
-	@echo "  bench           - Run benchmark tests"
-	@echo "  coverage-html   - Generate HTML coverage report"
+	@echo "  test                 - Run all tests"
+	@echo "  test-short           - Run only fast tests"
+	@echo "  test-coverage        - Run tests with coverage report"
+	@echo "  test-seo             - Run only SEO-related tests"
+	@echo "  test-trace           - Run only trace propagation tests"
+	@echo "  test-trace-e2e       - Run E2E trace flow tests (requires Redis)"
+	@echo "  test-trace-e2e-docker- Run E2E trace tests with Docker Redis"
+	@echo "  bench                - Run benchmark tests"
+	@echo "  coverage-html        - Generate HTML coverage report"
 	@echo ""
 	@echo "Development commands:"
 	@echo "  run             - Build and run the application"
@@ -71,7 +72,7 @@ build-all: ## Build for multiple platforms
 # Run all tests
 test: ## Run all tests
 	@echo "Running tests..."
-	@go test -v ./...
+	@go test -timeout 120s -v ./...
 
 # Run only fast tests
 test-short: ## Run only fast tests (skip slow integration tests)
@@ -107,10 +108,24 @@ test-trace: ## Run only trace propagation tests
 	@echo "Running trace propagation tests..."
 	@go test -v -run ".*Trace.*" ./internal/queue/...
 
-# Test E2E trace flow
-test-trace-e2e: ## Run E2E trace flow tests
+# Test E2E trace flow (requires Redis or will skip)
+test-trace-e2e: ## Run E2E trace flow tests (requires Redis on localhost:6379 or set TEST_REDIS_ADDR)
 	@echo "Running E2E trace flow tests..."
-	@go test -v -run ".*E2ETraceFlow.*" ./internal/queue/...
+	@echo "Note: Tests requiring Redis will skip if unavailable"
+	@TEST_REDIS_ADDR=localhost:6379 go test -v -run ".*E2ETraceFlow.*" ./internal/queue/...
+
+# Test E2E with Docker Redis (starts Redis container if needed)
+test-trace-e2e-docker: ## Run E2E trace tests with temporary Docker Redis container
+	@echo "Starting temporary Redis container..."
+	@docker rm -f test-redis-controller 2>/dev/null || true
+	@docker run -d --name test-redis-controller -p 16380:6379 redis:7-alpine
+	@echo "Waiting for Redis to be ready..."
+	@sleep 2
+	@echo "Running E2E trace flow tests..."
+	@TEST_REDIS_ADDR=localhost:16380 go test -v -run ".*E2ETraceFlow.*" ./internal/queue/... || (docker rm -f test-redis-controller && exit 1)
+	@echo "Stopping Redis container..."
+	@docker rm -f test-redis-controller
+	@echo "Tests complete"
 
 # Quick SEO smoke test (requires server running)
 test-seo-quick: ## Quick smoke test for SEO endpoints (server must be running on :8080)
