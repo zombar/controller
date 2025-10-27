@@ -3,6 +3,7 @@ package queue
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
 	"time"
 
@@ -16,6 +17,37 @@ type URLCache interface {
 	Get(ctx context.Context, url string) (string, error)
 	Set(ctx context.Context, url, scraperUUID string) error
 	Delete(ctx context.Context, url string) error
+}
+
+// slogAdapter wraps slog.Logger to implement asynq.Logger interface for structured logging
+type slogAdapter struct {
+	logger *slog.Logger
+}
+
+// Debug implements asynq.Logger
+func (l *slogAdapter) Debug(args ...interface{}) {
+	l.logger.Debug(fmt.Sprint(args...))
+}
+
+// Info implements asynq.Logger
+func (l *slogAdapter) Info(args ...interface{}) {
+	l.logger.Info(fmt.Sprint(args...))
+}
+
+// Warn implements asynq.Logger
+func (l *slogAdapter) Warn(args ...interface{}) {
+	l.logger.Warn(fmt.Sprint(args...))
+}
+
+// Error implements asynq.Logger
+func (l *slogAdapter) Error(args ...interface{}) {
+	l.logger.Error(fmt.Sprint(args...))
+}
+
+// Fatal implements asynq.Logger
+func (l *slogAdapter) Fatal(args ...interface{}) {
+	l.logger.Error(fmt.Sprint(args...))
+	log.Fatal(args...)
 }
 
 // Worker wraps the Asynq server for processing tasks
@@ -85,6 +117,11 @@ func NewWorker(
 
 		// Graceful shutdown timeout
 		ShutdownTimeout: 30 * time.Second,
+
+		// Use structured logging
+		Logger: &slogAdapter{
+			logger: slog.Default(),
+		},
 
 		// Error handler for logging
 		ErrorHandler: asynq.ErrorHandlerFunc(func(ctx context.Context, task *asynq.Task, err error) {
