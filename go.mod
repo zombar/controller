@@ -10,7 +10,7 @@ require (
 	github.com/hibiken/asynq v0.25.1
 	github.com/lib/pq v1.10.9
 	github.com/prometheus/client_golang v1.23.2
-	github.com/redis/go-redis/v9 v9.7.0
+	github.com/redis/go-redis/v9 v9.7.3
 	github.com/zombar/purpletab/pkg/metrics v0.0.0-20251025182248-ffe3c0c56936
 	github.com/zombar/purpletab/pkg/tracing v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.46.1
