@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -105,7 +104,7 @@ func (h *Handler) updateMetrics() {
 	for _, status := range statuses {
 		count, err := h.storage.CountScrapeJobsByStatus(status)
 		if err != nil {
-			log.Printf("Failed to count jobs by status %s: %v", status, err)
+			slog.Default().Error("failed to count jobs by status", "status", status, "error", err)
 			continue
 		}
 		h.businessMetrics.ScrapeJobsByStatus.WithLabelValues(status).Set(float64(count))
@@ -742,13 +741,13 @@ func (h *Handler) DeleteRequest(w http.ResponseWriter, r *http.Request) {
 	// Delete from upstream services first
 	if record.ScraperUUID != nil && *record.ScraperUUID != "" {
 		if err := h.scraper.DeleteScrape(r.Context(), *record.ScraperUUID); err != nil {
-			log.Printf("Warning: Failed to delete scrape %s: %v", *record.ScraperUUID, err)
+			slog.Default().Warn("failed to delete scrape", "scraper_uuid", *record.ScraperUUID, "error", err)
 		}
 	}
 
 	if record.TextAnalyzerUUID != "" {
 		if err := h.textAnalyzer.DeleteAnalysis(r.Context(), record.TextAnalyzerUUID); err != nil {
-			log.Printf("Warning: Failed to delete analysis %s: %v", record.TextAnalyzerUUID, err)
+			slog.Default().Warn("failed to delete analysis", "text_analyzer_uuid", record.TextAnalyzerUUID, "error", err)
 		}
 	}
 
@@ -1341,7 +1340,7 @@ func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 
 		// Update job with Asynq task ID
 		if err := h.storage.UpdateScrapeJobTaskID(jobID, taskID); err != nil {
-			log.Printf("Warning: Failed to update task ID for job %s: %v", jobID, err)
+			slog.Default().Warn("failed to update task id for job", "job_id", jobID, "error", err)
 		}
 	}
 
@@ -1496,7 +1495,7 @@ func (h *Handler) RetryScrapeRequest(w http.ResponseWriter, r *http.Request) {
 
 		// Update job with new Asynq task ID
 		if err := h.storage.UpdateScrapeJobTaskID(id, taskID); err != nil {
-			log.Printf("Warning: Failed to update task ID for job %s: %v", id, err)
+			slog.Default().Warn("failed to update task id for job", "job_id", id, "error", err)
 		}
 	}
 
@@ -1593,7 +1592,7 @@ func (h *Handler) processTextAnalysisRequest(id, text string) {
 
 	// Mark as completed
 	h.scrapeRequests.SetCompleted(id, requestID)
-	log.Printf("Text analysis request %s completed successfully, result saved as %s", id, requestID)
+	slog.Default().Info("text analysis request completed successfully", "request_id", id, "result_id", requestID)
 }
 
 // ListSchedulerTasks proxies the scheduler's list tasks endpoint
