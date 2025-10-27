@@ -50,14 +50,14 @@ func NewWorker(
 		Concurrency: cfg.Concurrency,
 
 		// Queue priority: higher value = higher priority
+		// Named queues for clarity: scrape tasks get highest priority, link extraction is lower
 		Queues: map[string]int{
-			"critical": 6,
-			"default":  3,
-			"low":      1,
+			"scrape":         6, // URL scraping tasks (highest priority)
+			"link-extraction": 3, // Link extraction and processing (lower priority)
 		},
 
 		// StrictPriority: false means queues are processed proportionally
-		// true would mean critical queue must be empty before processing default
+		// true would mean scrape queue must be empty before processing link-extraction
 		StrictPriority: false,
 
 		// Retry configuration
@@ -122,7 +122,7 @@ func (w *Worker) registerHandlers() {
 func (w *Worker) Start() error {
 	w.logger.Info("starting asynq worker",
 		"concurrency", w.concurrency,
-		"queues", map[string]int{"critical": 6, "default": 3, "low": 1},
+		"queues", map[string]int{"scrape": 6, "link-extraction": 3},
 	)
 
 	// Run is blocking - starts processing tasks

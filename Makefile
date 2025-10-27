@@ -21,6 +21,8 @@ help: ## Display this help message
 	@echo "  test-short      - Run only fast tests"
 	@echo "  test-coverage   - Run tests with coverage report"
 	@echo "  test-seo        - Run only SEO-related tests"
+	@echo "  test-trace      - Run only trace propagation tests"
+	@echo "  test-trace-e2e  - Run E2E trace flow tests"
 	@echo "  bench           - Run benchmark tests"
 	@echo "  coverage-html   - Generate HTML coverage report"
 	@echo ""
@@ -99,6 +101,16 @@ test-seo: ## Run only SEO-related tests
 	@go test -v ./internal/seo/...
 	@go test -v ./internal/templates/...
 	@go test -v -run ".*SEO.*" ./internal/handlers/...
+
+# Test trace propagation
+test-trace: ## Run only trace propagation tests
+	@echo "Running trace propagation tests..."
+	@go test -v -run ".*Trace.*" ./internal/queue/...
+
+# Test E2E trace flow
+test-trace-e2e: ## Run E2E trace flow tests
+	@echo "Running E2E trace flow tests..."
+	@go test -v -run ".*E2ETraceFlow.*" ./internal/queue/...
 
 # Quick SEO smoke test (requires server running)
 test-seo-quick: ## Quick smoke test for SEO endpoints (server must be running on :8080)

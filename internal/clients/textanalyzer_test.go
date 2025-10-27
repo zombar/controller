@@ -17,31 +17,27 @@ func TestTextAnalyzerClient_Analyze(t *testing.T) {
 		expectError    bool
 	}{
 		{
-			name: "successful analysis",
+			name: "successful analysis (async queue)",
 			text: "This is a test text to analyze",
 			mockResponse: map[string]interface{}{
-				"id": "analysis-123",
-				"metadata": map[string]interface{}{
-					"tags":          []string{"test", "analysis", "content"},
-					"word_count":    7,
-					"sentiment":     "neutral",
-					"readability":   75.5,
-				},
+				"job_id":  "analysis-123",
+				"task_id": "task-456",
+				"status":  "queued",
+				"message": "Analysis queued for processing",
 			},
-			mockStatusCode: http.StatusOK,
+			mockStatusCode: http.StatusAccepted,
 			expectError:    false,
 		},
 		{
-			name: "analysis with 201 created",
+			name: "analysis with 202 accepted",
 			text: "Another test text",
 			mockResponse: map[string]interface{}{
-				"id": "analysis-456",
-				"metadata": map[string]interface{}{
-					"tags":       []string{"example"},
-					"word_count": 3,
-				},
+				"job_id":  "analysis-456",
+				"task_id": "task-789",
+				"status":  "queued",
+				"message": "Analysis queued for processing",
 			},
-			mockStatusCode: http.StatusCreated,
+			mockStatusCode: http.StatusAccepted,
 			expectError:    false,
 		},
 		{
@@ -73,7 +69,7 @@ func TestTextAnalyzerClient_Analyze(t *testing.T) {
 				// Send response
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(tt.mockStatusCode)
-				if tt.mockStatusCode == http.StatusOK || tt.mockStatusCode == http.StatusCreated {
+				if tt.mockStatusCode == http.StatusAccepted {
 					json.NewEncoder(w).Encode(tt.mockResponse)
 				} else {
 					json.NewEncoder(w).Encode(map[string]string{"error": "mock error"})
@@ -99,12 +95,17 @@ func TestTextAnalyzerClient_Analyze(t *testing.T) {
 				if result == nil {
 					t.Fatal("Expected result but got nil")
 				}
-				expectedID := tt.mockResponse["id"].(string)
-				if result.ID != expectedID {
-					t.Errorf("Expected ID %s, got %s", expectedID, result.ID)
+				// The deprecated Analyze method now returns job_id as ID
+				expectedJobID := tt.mockResponse["job_id"].(string)
+				if result.ID != expectedJobID {
+					t.Errorf("Expected ID %s, got %s", expectedJobID, result.ID)
 				}
 				if result.Metadata == nil {
 					t.Error("Expected metadata but got nil")
+				}
+				// Verify the queued status is in metadata
+				if status, ok := result.Metadata["status"].(string); !ok || status != "queued" {
+					t.Errorf("Expected status 'queued' in metadata, got %v", result.Metadata["status"])
 				}
 			}
 		})

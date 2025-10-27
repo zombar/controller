@@ -24,6 +24,10 @@ type ScrapeTaskPayload struct {
 	ExtractLinks bool    `json:"extract_links"`
 	ParentJobID  *string `json:"parent_job_id,omitempty"`
 	Depth        int     `json:"depth"`
+	// Tracing and timing fields
+	TraceID    string `json:"trace_id,omitempty"`
+	SpanID     string `json:"span_id,omitempty"`
+	EnqueuedAt int64  `json:"enqueued_at"` // Unix timestamp in nanoseconds
 }
 
 // ExtractLinksTaskPayload represents the payload for a link extraction task
@@ -31,6 +35,10 @@ type ExtractLinksTaskPayload struct {
 	ParentJobID string `json:"parent_job_id"`
 	SourceURL   string `json:"source_url"`
 	ParentDepth int    `json:"parent_depth"`
+	// Tracing and timing fields
+	TraceID    string `json:"trace_id,omitempty"`
+	SpanID     string `json:"span_id,omitempty"`
+	EnqueuedAt int64  `json:"enqueued_at"` // Unix timestamp in nanoseconds
 }
 
 // Client wraps the Asynq client for enqueueing tasks
@@ -64,13 +72,30 @@ func (c *Client) EnqueueScrape(ctx context.Context, jobID, url string, extractLi
 
 // EnqueueScrapeWithParent enqueues a scrape job with parent and depth tracking
 func (c *Client) EnqueueScrapeWithParent(ctx context.Context, jobID, url string, extractLinks bool, parentJobID *string, depth int) (string, error) {
-	// Create task payload
+	// Create task payload with trace context
 	payload := ScrapeTaskPayload{
 		JobID:        jobID,
 		URL:          url,
 		ExtractLinks: extractLinks,
 		ParentJobID:  parentJobID,
 		Depth:        depth,
+		EnqueuedAt:   time.Now().UnixNano(), // Record enqueue time for queue wait metrics
+	}
+
+	// Add tracing context if available
+	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+		spanCtx := span.SpanContext()
+		payload.TraceID = spanCtx.TraceID().String()
+		payload.SpanID = spanCtx.SpanID().String()
+
+		// Record enqueue event
+		span.AddEvent("task_enqueued", trace.WithAttributes(
+			attribute.String("task.type", TypeScrapeURL),
+			attribute.String("task.id", jobID),
+			attribute.String("url", url),
+			attribute.Bool("extract_links", extractLinks),
+			attribute.Int64("enqueued_at", payload.EnqueuedAt),
+		))
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -83,40 +108,12 @@ func (c *Client) EnqueueScrapeWithParent(ctx context.Context, jobID, url string,
 
 	// Task options
 	opts := []asynq.Option{
+		asynq.TaskID(jobID),                   // Use job ID as task ID for correlation
 		asynq.MaxRetry(3),                     // Max 3 retries
 		asynq.Timeout(10 * time.Minute),       // 10 minute timeout per task
-		asynq.Queue("default"),                // Use default queue
+		asynq.Queue("scrape"),                 // Scrape queue (high priority)
 		asynq.Retention(7 * 24 * time.Hour),   // Keep completed tasks for 7 days
-	}
-
-	// Add tracing context if available
-	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
-		spanCtx := span.SpanContext()
-		opts = append(opts, asynq.TaskID(jobID)) // Use job ID as task ID for correlation
-
-		// Record enqueue event
-		span.AddEvent("task_enqueued", trace.WithAttributes(
-			attribute.String("task.type", TypeScrapeURL),
-			attribute.String("task.id", jobID),
-			attribute.String("url", url),
-			attribute.Bool("extract_links", extractLinks),
-		))
-
-		// Store trace context in task (for propagation to worker)
-		traceID := spanCtx.TraceID().String()
-		spanID := spanCtx.SpanID().String()
-		opts = append(opts, asynq.Retention(7*24*time.Hour))
-
-		// Add trace metadata to task
-		task = asynq.NewTask(
-			TypeScrapeURL,
-			payloadBytes,
-			asynq.TaskID(jobID),
-			asynq.Unique(time.Minute), // Prevent duplicate tasks within 1 minute
-		)
-
-		_ = traceID // TODO: Propagate trace context through task metadata
-		_ = spanID
+		asynq.Unique(time.Minute),             // Prevent duplicate tasks within 1 minute
 	}
 
 	// Enqueue the task
@@ -134,6 +131,14 @@ func (c *Client) EnqueueScrapeWithDelay(ctx context.Context, jobID, url string, 
 		JobID:        jobID,
 		URL:          url,
 		ExtractLinks: extractLinks,
+		EnqueuedAt:   time.Now().UnixNano(),
+	}
+
+	// Add tracing context if available
+	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+		spanCtx := span.SpanContext()
+		payload.TraceID = spanCtx.TraceID().String()
+		payload.SpanID = spanCtx.SpanID().String()
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -147,7 +152,7 @@ func (c *Client) EnqueueScrapeWithDelay(ctx context.Context, jobID, url string, 
 		asynq.ProcessIn(delay),              // Delay execution
 		asynq.MaxRetry(3),
 		asynq.Timeout(10 * time.Minute),
-		asynq.Queue("default"),
+		asynq.Queue("scrape"),               // Scrape queue (high priority)
 	}
 
 	info, err := c.client.Enqueue(task, opts...)
@@ -164,6 +169,21 @@ func (c *Client) EnqueueExtractLinks(ctx context.Context, parentJobID, sourceURL
 		ParentJobID: parentJobID,
 		SourceURL:   sourceURL,
 		ParentDepth: parentDepth,
+		EnqueuedAt:  time.Now().UnixNano(),
+	}
+
+	// Add tracing context if available
+	if span := trace.SpanFromContext(ctx); span.SpanContext().IsValid() {
+		spanCtx := span.SpanContext()
+		payload.TraceID = spanCtx.TraceID().String()
+		payload.SpanID = spanCtx.SpanID().String()
+
+		// Record enqueue event
+		span.AddEvent("link_extraction_enqueued", trace.WithAttributes(
+			attribute.String("task.type", TypeExtractLinks),
+			attribute.String("parent_job_id", parentJobID),
+			attribute.String("source_url", sourceURL),
+		))
 	}
 
 	payloadBytes, err := json.Marshal(payload)
@@ -176,7 +196,7 @@ func (c *Client) EnqueueExtractLinks(ctx context.Context, parentJobID, sourceURL
 	opts := []asynq.Option{
 		asynq.MaxRetry(2),                  // Retry up to 2 times
 		asynq.Timeout(5 * time.Minute),     // Link extraction should be fast
-		asynq.Queue("default"),
+		asynq.Queue("link-extraction"),     // Link extraction queue (lower priority)
 		asynq.ProcessIn(1 * time.Second),   // Small delay to ensure parent task fully completes
 	}
 

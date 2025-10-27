@@ -24,13 +24,23 @@ type TextAnalyzerClient struct {
 
 // TextAnalyzerRequest represents a request to the text analyzer service
 type TextAnalyzerRequest struct {
-	Text string `json:"text"`
+	Text         string   `json:"text"`
+	OriginalHTML string   `json:"original_html,omitempty"` // Compressed + base64 encoded original HTML/raw text
+	Images       []string `json:"images,omitempty"`
 }
 
 // TextAnalyzerResponse represents a response from the text analyzer service
 type TextAnalyzerResponse struct {
 	ID       string                 `json:"id"`
 	Metadata map[string]interface{} `json:"metadata"`
+}
+
+// TextAnalyzerQueueResponse represents the initial queue response
+type TextAnalyzerQueueResponse struct {
+	JobID   string `json:"job_id"`
+	TaskID  string `json:"task_id"`
+	Status  string `json:"status"`
+	Message string `json:"message"`
 }
 
 // NormalizeTag ensures a tag is at most double-barrelled (max one hyphen)
@@ -72,23 +82,29 @@ func NewTextAnalyzerClient(baseURL string) *TextAnalyzerClient {
 	}
 }
 
-// Analyze sends text to the analyzer service and returns the response
-func (c *TextAnalyzerClient) Analyze(ctx context.Context, text string) (*TextAnalyzerResponse, error) {
+// EnqueueAnalysis enqueues text, original HTML, and images for analysis and returns the job ID
+func (c *TextAnalyzerClient) EnqueueAnalysis(ctx context.Context, text, originalHTML string, images []string) (string, error) {
 	tracer := otel.Tracer("controller")
-	ctx, span := tracer.Start(ctx, "textanalyzer.Analyze")
+	ctx, span := tracer.Start(ctx, "textanalyzer.EnqueueAnalysis")
 	defer span.End()
 
 	span.SetAttributes(
 		attribute.Int("textanalyzer.text_length", len(text)),
+		attribute.Bool("textanalyzer.has_original_html", originalHTML != ""),
+		attribute.Int("textanalyzer.image_count", len(images)),
 		attribute.String("http.method", "POST"),
 	)
 
-	reqBody := TextAnalyzerRequest{Text: text}
+	reqBody := TextAnalyzerRequest{
+		Text:         text,
+		OriginalHTML: originalHTML,
+		Images:       images,
+	}
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to marshal request")
-		return nil, fmt.Errorf("failed to marshal request: %w", err)
+		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -97,7 +113,7 @@ func (c *TextAnalyzerClient) Analyze(ctx context.Context, text string) (*TextAna
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to create request")
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return "", fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
@@ -105,7 +121,7 @@ func (c *TextAnalyzerClient) Analyze(ctx context.Context, text string) (*TextAna
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to send request")
-		return nil, fmt.Errorf("failed to send request to text analyzer: %w", err)
+		return "", fmt.Errorf("failed to send request to text analyzer: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -115,25 +131,47 @@ func (c *TextAnalyzerClient) Analyze(ctx context.Context, text string) (*TextAna
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to read response")
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
 		span.SetStatus(codes.Error, fmt.Sprintf("status %d", resp.StatusCode))
-		return nil, fmt.Errorf("text analyzer service returned status %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("text analyzer service returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var analyzerResp TextAnalyzerResponse
-	if err := json.Unmarshal(body, &analyzerResp); err != nil {
+	var queueResp TextAnalyzerQueueResponse
+	if err := json.Unmarshal(body, &queueResp); err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "failed to unmarshal response")
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+		return "", fmt.Errorf("failed to unmarshal response: %w", err)
 	}
 
-	tags := analyzerResp.GetTags()
-	span.SetAttributes(attribute.Int("textanalyzer.tag_count", len(tags)))
+	span.SetAttributes(
+		attribute.String("textanalyzer.job_id", queueResp.JobID),
+		attribute.String("textanalyzer.status", queueResp.Status),
+	)
 	span.SetStatus(codes.Ok, "success")
-	return &analyzerResp, nil
+	return queueResp.JobID, nil
+}
+
+// Analyze sends text to the analyzer service and returns the response (DEPRECATED - use EnqueueAnalysis)
+// This is kept for backwards compatibility but will be removed in future versions
+func (c *TextAnalyzerClient) Analyze(ctx context.Context, text string) (*TextAnalyzerResponse, error) {
+	// For backwards compatibility, enqueue and immediately return empty response
+	// The actual analysis will happen asynchronously via the queue
+	jobID, err := c.EnqueueAnalysis(ctx, text, "", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	// Return minimal response with job ID
+	return &TextAnalyzerResponse{
+		ID: jobID,
+		Metadata: map[string]interface{}{
+			"status":  "queued",
+			"message": "Analysis queued for processing",
+		},
+	}, nil
 }
 
 // DeleteAnalysis deletes an analysis by ID
