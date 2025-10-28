@@ -548,7 +548,11 @@ func (w *Worker) extractAndQueueLinks(ctx context.Context, parentJobID, sourceUR
 
 		// Enqueue to Asynq with delay to spread load
 		if w.queueClient != nil {
-			taskID, err := w.queueClient.EnqueueScrapeWithParent(ctx, jobID, link, shouldExtractLinks, &parentJobID, childDepth)
+			// Use background context to start fresh trace for child scrape
+			// This prevents trace tree explosion with deep link extraction
+			// Parent-child relationship still tracked via ParentJobID in DB
+			childCtx := context.Background()
+			taskID, err := w.queueClient.EnqueueScrapeWithParent(childCtx, jobID, link, shouldExtractLinks, &parentJobID, childDepth)
 			if err != nil {
 				w.logger.Error("failed to enqueue task",
 					"url", link,
