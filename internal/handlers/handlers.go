@@ -18,6 +18,8 @@ import (
 	internalslug "github.com/zombar/controller/internal/slug"
 	"github.com/zombar/controller/internal/storage"
 	"github.com/zombar/purpletab/pkg/metrics"
+	"github.com/zombar/purpletab/pkg/tracing"
+	"go.opentelemetry.io/otel/attribute"
 )
 
 // Handler contains all HTTP handlers
@@ -1310,6 +1312,10 @@ func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Create scrape job in database
 	jobID := uuid.New().String()
+
+	// Add scrape_request_id to trace span for distributed tracing
+	tracing.AddSpanAttributes(r, attribute.String("scrape_request_id", jobID))
+
 	job := &storage.ScrapeJob{
 		ID:           jobID,
 		URL:          req.URL,

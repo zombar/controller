@@ -72,8 +72,7 @@ func (w *Worker) handleScrapeTask(ctx context.Context, t *asynq.Task) error {
 					trace.WithSpanKind(trace.SpanKindConsumer),
 					trace.WithAttributes(
 						attribute.String("task.type", TypeScrapeURL),
-						attribute.String("task.id", jobID),
-						attribute.String("job.id", jobID),
+						attribute.String("scrape_request_id", jobID),
 						attribute.String("job.url", url),
 						attribute.Bool("job.extract_links", extractLinks),
 						attribute.Float64("queue.wait_time_seconds", queueWaitTime.Seconds()),
@@ -92,7 +91,7 @@ func (w *Worker) handleScrapeTask(ctx context.Context, t *asynq.Task) error {
 		// No trace context in payload, check current context
 		if existingSpan := trace.SpanFromContext(ctx); existingSpan.SpanContext().IsValid() {
 			existingSpan.SetAttributes(
-				attribute.String("job.id", jobID),
+				attribute.String("scrape_request_id", jobID),
 				attribute.String("job.url", url),
 				attribute.Bool("job.extract_links", extractLinks),
 				attribute.Float64("queue.wait_time_seconds", queueWaitTime.Seconds()),

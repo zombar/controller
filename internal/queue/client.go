@@ -103,7 +103,7 @@ func (c *Client) EnqueueScrapeWithParent(ctx context.Context, jobID, url string,
 		// Record enqueue event
 		span.AddEvent("task_enqueued", trace.WithAttributes(
 			attribute.String("task.type", TypeScrapeURL),
-			attribute.String("task.id", jobID),
+			attribute.String("scrape_request_id", jobID),
 			attribute.String("url", url),
 			attribute.Bool("extract_links", extractLinks),
 			attribute.Int64("enqueued_at", payload.EnqueuedAt),
