@@ -7,8 +7,11 @@ import (
 
 // DocumentUpdateEvent represents a document status update
 type DocumentUpdateEvent struct {
-	RequestID string `json:"request_id"`
-	Status    string `json:"status"`
+	RequestID string                 `json:"request_id"`
+	Status    string                 `json:"status"`
+	Stage     string                 `json:"stage,omitempty"`     // scraping, enriching, extracting_links
+	Message   string                 `json:"message,omitempty"`   // Human-readable status message
+	Metadata  map[string]interface{} `json:"metadata,omitempty"` // Additional context
 }
 
 // Subscriber represents a client listening for events

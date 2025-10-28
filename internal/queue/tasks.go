@@ -105,8 +105,15 @@ func (w *Worker) handleScrapeTask(ctx context.Context, t *asynq.Task) error {
 		// Continue processing even if status update fails
 	}
 
+	// Publish scraping started event
+	if w.eventPublisherWithDetails != nil && payload.RequestID != "" {
+		w.eventPublisherWithDetails(payload.RequestID, "scraping", "scraping", "Scraping URL", map[string]interface{}{
+			"url": url,
+		})
+	}
+
 	// Execute the scrape workflow
-	err := w.processScrape(ctx, jobID, url, extractLinks)
+	err := w.processScrape(ctx, jobID, url, extractLinks, payload.RequestID)
 	if err != nil {
 		// Update job status to failed
 		errMsg := err.Error()
@@ -119,8 +126,20 @@ func (w *Worker) handleScrapeTask(ctx context.Context, t *asynq.Task) error {
 			w.logger.Error("failed to increment retries", "job_id", jobID, "error", retryErr)
 		}
 
+		// Publish scrape failed event
+		if w.eventPublisherWithDetails != nil && payload.RequestID != "" {
+			w.eventPublisherWithDetails(payload.RequestID, "scrape_failed", "scraping", "Scraping failed", map[string]interface{}{
+				"error": errMsg,
+			})
+		}
+
 		w.logger.Error("scrape task failed", "job_id", jobID, "error", err)
 		return err // Asynq will retry
+	}
+
+	// Publish scraping completed event
+	if w.eventPublisherWithDetails != nil && payload.RequestID != "" {
+		w.eventPublisherWithDetails(payload.RequestID, "scraped", "scraping", "Scraping completed", nil)
 	}
 
 	w.logger.Info("scrape task completed", "job_id", jobID)
@@ -128,7 +147,7 @@ func (w *Worker) handleScrapeTask(ctx context.Context, t *asynq.Task) error {
 }
 
 // processScrape contains the main scraping logic
-func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLinks bool) error {
+func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLinks bool, requestID string) error {
 	// Score the URL first
 	scoreResp, err := w.scraperClient.ScoreLink(ctx, url)
 	if err != nil {
@@ -148,7 +167,7 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 	if !isImageURL && scoreResp.Score.Score < w.linkScoreThreshold {
 		// Save a tombstoned record for low-quality content
 		tombstoneTime := time.Now().UTC().Add(time.Duration(w.tombstonePeriodLowScore) * 24 * time.Hour)
-		requestID := uuid.New().String()
+		newRequestID := uuid.New().String()
 
 		// Add domain name to tags, normalizing categories
 		tags := make([]string, 0, len(scoreResp.Score.Categories))
@@ -163,7 +182,7 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 		tags = append(tags, "scrape")
 
 		record := &storage.Request{
-			ID:         requestID,
+			ID:         newRequestID,
 			CreatedAt:  time.Now().UTC(),
 			SourceType: "url",
 			SourceURL:  &url,
@@ -188,7 +207,7 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 		}
 
 		// Update job with result
-		if err := w.storage.UpdateScrapeJobResult(jobID, requestID); err != nil {
+		if err := w.storage.UpdateScrapeJobResult(jobID, newRequestID); err != nil {
 			return fmt.Errorf("failed to update job result: %w", err)
 		}
 
@@ -291,7 +310,7 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 	}
 
 	// Save to database
-	requestID := uuid.New().String()
+	newRequestID := uuid.New().String()
 
 	// Get initial tags from link score categories (normalized)
 	// Analyzer tags will be added later when textanalyzer completes
@@ -326,12 +345,12 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 		if slugSource == "" {
 			slugSource = url
 		}
-		generatedSlug := internalslug.GenerateWithFallback(slugSource, requestID)
+		generatedSlug := internalslug.GenerateWithFallback(slugSource, newRequestID)
 		slug = &generatedSlug
 	}
 
 	req := &storage.Request{
-		ID:               requestID,
+		ID:               newRequestID,
 		CreatedAt:        time.Now(),
 		SourceType:       "url",
 		SourceURL:        &url,
@@ -348,28 +367,28 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 	}
 
 	// Update job with result
-	if err := w.storage.UpdateScrapeJobResult(jobID, requestID); err != nil {
+	if err := w.storage.UpdateScrapeJobResult(jobID, newRequestID); err != nil {
 		return fmt.Errorf("failed to update job result: %w", err)
 	}
 
 	w.logger.Info("scrape job completed successfully",
 		"job_id", jobID,
-		"request_id", requestID,
+		"request_id", newRequestID,
 	)
 
 	// Enqueue analysis result retrieval task if text analysis was enqueued
 	if textAnalyzerJobID != "" && w.queueClient != nil {
-		_, err := w.queueClient.EnqueueRetrieveAnalysis(ctx, requestID, textAnalyzerJobID, 0)
+		_, err := w.queueClient.EnqueueRetrieveAnalysis(ctx, newRequestID, textAnalyzerJobID, 0)
 		if err != nil {
 			// Log error but don't fail the scrape - retrieval can be retried manually if needed
 			w.logger.Warn("failed to enqueue analysis retrieval",
-				"request_id", requestID,
+				"request_id", newRequestID,
 				"analysis_job_id", textAnalyzerJobID,
 				"error", err,
 			)
 		} else {
 			w.logger.Info("enqueued analysis retrieval task",
-				"request_id", requestID,
+				"request_id", newRequestID,
 				"analysis_job_id", textAnalyzerJobID,
 			)
 		}
@@ -402,7 +421,7 @@ func (w *Worker) processScrape(ctx context.Context, jobID, url string, extractLi
 			)
 			// Enqueue link extraction as a separate task, preserving trace context
 			if w.queueClient != nil {
-				_, err := w.queueClient.EnqueueExtractLinks(ctx, jobID, url, job.Depth)
+				_, err := w.queueClient.EnqueueExtractLinks(ctx, jobID, url, job.Depth, requestID)
 				if err != nil {
 					w.logger.Error("failed to enqueue extract links task",
 						"url", url,
@@ -469,14 +488,14 @@ func shouldSkipURL(rawURL string) bool {
 }
 
 // extractAndQueueLinks extracts links and queues them for scraping
-func (w *Worker) extractAndQueueLinks(ctx context.Context, parentJobID, sourceURL string, parentDepth int) {
+func (w *Worker) extractAndQueueLinks(ctx context.Context, parentJobID, sourceURL string, parentDepth int, requestID string) (int, error) {
 	extractResp, err := w.scraperClient.ExtractLinks(ctx, sourceURL)
 	if err != nil {
 		w.logger.Error("failed to extract links",
 			"source_url", sourceURL,
 			"error", err,
 		)
-		return
+		return 0, fmt.Errorf("failed to extract links: %w", err)
 	}
 
 	// Filter out URLs that should not be scraped (images, mailto, tel, etc.)
@@ -554,6 +573,8 @@ func (w *Worker) extractAndQueueLinks(ctx context.Context, parentJobID, sourceUR
 			)
 		}
 	}
+
+	return len(links), nil
 }
 
 // handleExtractLinksTask processes a link extraction task
@@ -578,6 +599,13 @@ func (w *Worker) handleExtractLinksTask(ctx context.Context, t *asynq.Task) erro
 		"parent_depth", payload.ParentDepth,
 		"queue_wait_seconds", queueWaitTime.Seconds(),
 	)
+
+	// Publish link extraction started event
+	if w.eventPublisherWithDetails != nil && payload.RequestID != "" {
+		w.eventPublisherWithDetails(payload.RequestID, "extracting_links", "extracting_links", "Extracting links from page", map[string]interface{}{
+			"url": payload.SourceURL,
+		})
+	}
 
 	// Recreate trace context from payload if available
 	var span trace.Span
@@ -631,7 +659,25 @@ func (w *Worker) handleExtractLinksTask(ctx context.Context, t *asynq.Task) erro
 	}
 
 	// Extract and queue links - this runs in its own task with its own context
-	w.extractAndQueueLinks(ctx, payload.ParentJobID, payload.SourceURL, payload.ParentDepth)
+	linkCount, err := w.extractAndQueueLinks(ctx, payload.ParentJobID, payload.SourceURL, payload.ParentDepth, payload.RequestID)
+
+	if err != nil {
+		// Publish link extraction failed event
+		if w.eventPublisherWithDetails != nil && payload.RequestID != "" {
+			w.eventPublisherWithDetails(payload.RequestID, "link_extraction_failed", "extracting_links", "Link extraction failed", map[string]interface{}{
+				"error": err.Error(),
+			})
+		}
+		w.logger.Error("link extraction failed", "error", err)
+		return err
+	}
+
+	// Publish link extraction completed event
+	if w.eventPublisherWithDetails != nil && payload.RequestID != "" {
+		w.eventPublisherWithDetails(payload.RequestID, "links_extracted", "extracting_links", "Link extraction completed", map[string]interface{}{
+			"link_count": linkCount,
+		})
+	}
 
 	return nil
 }
@@ -663,6 +709,13 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 		"elapsed_minutes", int(elapsedMinutes),
 		"queue_wait_seconds", queueWaitTime.Seconds(),
 	)
+
+	// Publish enriching event (only on first attempt to avoid spamming)
+	if payload.AttemptCount == 1 && w.eventPublisherWithDetails != nil {
+		w.eventPublisherWithDetails(payload.RequestID, "enriching", "enriching", "Retrieving AI enrichment results", map[string]interface{}{
+			"analysis_job_id": payload.AnalysisJobID,
+		})
+	}
 
 	// Recreate trace context from payload if available
 	var span trace.Span
@@ -736,8 +789,11 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 			w.storage.UpdateRequestMetadata(payload.RequestID, req.Metadata)
 
 			// Publish event for failed status
-			if w.eventPublisher != nil {
-				w.eventPublisher(payload.RequestID, "failed")
+			if w.eventPublisherWithDetails != nil {
+				w.eventPublisherWithDetails(payload.RequestID, "enrichment_failed", "enriching", "Enrichment timed out", map[string]interface{}{
+					"reason":          "timeout",
+					"elapsed_minutes": int(elapsedMinutes),
+				})
 			}
 		}
 		return nil // Return success to stop retrying
@@ -819,8 +875,10 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 	req.Metadata["textanalyzer_status"] = "completed"
 
 	// Publish event for completed status
-	if w.eventPublisher != nil {
-		w.eventPublisher(payload.RequestID, "completed")
+	if w.eventPublisherWithDetails != nil {
+		w.eventPublisherWithDetails(payload.RequestID, "enriched", "enriching", "Document enrichment completed", map[string]interface{}{
+			"quality_score": qualityScore,
+		})
 	}
 
 	// Apply two-tier tombstoning based on quality score

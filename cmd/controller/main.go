@@ -164,8 +164,9 @@ func main() {
 		textAnalyzerClient,
 		queueClient,
 		urlCache,
-		handler.GetBusinessMetrics(), // Pass business metrics to worker
-		handler.PublishDocumentUpdate, // Pass event publisher for SSE
+		handler.GetBusinessMetrics(),             // Pass business metrics to worker
+		handler.PublishDocumentUpdate,            // Pass event publisher for SSE
+		handler.PublishDocumentUpdateWithDetails, // Pass detailed event publisher for lifecycle SSE
 	)
 	logger.Info("queue worker initialized",
 		"concurrency", cfg.WorkerConcurrency,

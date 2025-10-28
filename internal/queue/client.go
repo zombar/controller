@@ -25,6 +25,7 @@ type ScrapeTaskPayload struct {
 	ExtractLinks bool    `json:"extract_links"`
 	ParentJobID  *string `json:"parent_job_id,omitempty"`
 	Depth        int     `json:"depth"`
+	RequestID    string  `json:"request_id,omitempty"` // Optional: for SSE events to user
 	// Tracing and timing fields
 	TraceID    string `json:"trace_id,omitempty"`
 	SpanID     string `json:"span_id,omitempty"`
@@ -36,6 +37,7 @@ type ExtractLinksTaskPayload struct {
 	ParentJobID string `json:"parent_job_id"`
 	SourceURL   string `json:"source_url"`
 	ParentDepth int    `json:"parent_depth"`
+	RequestID   string `json:"request_id,omitempty"` // Optional: for SSE events to user
 	// Tracing and timing fields
 	TraceID    string `json:"trace_id,omitempty"`
 	SpanID     string `json:"span_id,omitempty"`
@@ -176,11 +178,12 @@ func (c *Client) EnqueueScrapeWithDelay(ctx context.Context, jobID, url string, 
 }
 
 // EnqueueExtractLinks enqueues a link extraction task
-func (c *Client) EnqueueExtractLinks(ctx context.Context, parentJobID, sourceURL string, parentDepth int) (string, error) {
+func (c *Client) EnqueueExtractLinks(ctx context.Context, parentJobID, sourceURL string, parentDepth int, requestID string) (string, error) {
 	payload := ExtractLinksTaskPayload{
 		ParentJobID: parentJobID,
 		SourceURL:   sourceURL,
 		ParentDepth: parentDepth,
+		RequestID:   requestID,
 		EnqueuedAt:  time.Now().UnixNano(),
 	}
 

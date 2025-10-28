@@ -727,9 +727,17 @@ func (h *Handler) StreamRequestUpdates(w http.ResponseWriter, r *http.Request) {
 
 // PublishDocumentUpdate publishes a document update event to SSE subscribers
 func (h *Handler) PublishDocumentUpdate(requestID string, status string) {
+	h.PublishDocumentUpdateWithDetails(requestID, status, "", "", nil)
+}
+
+// PublishDocumentUpdateWithDetails publishes a detailed document update event
+func (h *Handler) PublishDocumentUpdateWithDetails(requestID, status, stage, message string, metadata map[string]interface{}) {
 	h.broadcaster.Publish(events.DocumentUpdateEvent{
 		RequestID: requestID,
 		Status:    status,
+		Stage:     stage,
+		Message:   message,
+		Metadata:  metadata,
 	})
 }
 
