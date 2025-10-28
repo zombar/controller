@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/zombar/controller/internal/clients"
+	"github.com/zombar/controller/internal/events"
 	"github.com/zombar/controller/internal/queue"
 	"github.com/zombar/controller/internal/scraper_requests"
 	internalslug "github.com/zombar/controller/internal/slug"
@@ -37,6 +38,7 @@ type Handler struct {
 	businessMetrics         *metrics.BusinessMetrics
 	tombstonePeriodLowScore int // Days until deletion for low-score URLs
 	tombstonePeriodManual   int // Days until deletion for manual tombstones
+	broadcaster             *events.Broadcaster
 }
 
 // URLCache defines the interface for URL caching
@@ -69,6 +71,7 @@ func NewWithMetrics(store *storage.Storage, scraper *clients.ScraperClient, text
 		businessMetrics:         businessMetrics,
 		tombstonePeriodLowScore: tombstonePeriodLowScore,
 		tombstonePeriodManual:   tombstonePeriodManual,
+		broadcaster:             events.NewBroadcaster(),
 	}
 
 	// Start periodic metrics updater for gauges
@@ -654,6 +657,80 @@ func (h *Handler) GetRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, response, http.StatusOK)
+}
+
+// StreamRequestUpdates provides an SSE endpoint for document status updates
+func (h *Handler) StreamRequestUpdates(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extract ID from URL path: /api/requests/{id}/stream
+	path := r.URL.Path
+	if !strings.HasSuffix(path, "/stream") {
+		respondError(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	// Remove /api/requests/ prefix and /stream suffix to get ID
+	id := path[len("/api/requests/") : len(path)-len("/stream")]
+	if id == "" {
+		respondError(w, "Request ID is required", http.StatusBadRequest)
+		return
+	}
+
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Create subscriber
+	subID := uuid.New().String()
+	subscriber := h.broadcaster.Subscribe(subID, id)
+	defer h.broadcaster.Unsubscribe(subID)
+
+	// Get flusher for streaming
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		respondError(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Send initial connection message
+	fmt.Fprintf(w, "event: connected\ndata: {\"request_id\":\"%s\"}\n\n", id)
+	flusher.Flush()
+
+	// Stream events
+	for {
+		select {
+		case event, ok := <-subscriber.Events:
+			if !ok {
+				return
+			}
+
+			eventData, err := events.MarshalEvent(event)
+			if err != nil {
+				slog.Error("Failed to marshal event", "error", err)
+				continue
+			}
+
+			fmt.Fprint(w, eventData)
+			flusher.Flush()
+
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// PublishDocumentUpdate publishes a document update event to SSE subscribers
+func (h *Handler) PublishDocumentUpdate(requestID string, status string) {
+	h.broadcaster.Publish(events.DocumentUpdateEvent{
+		RequestID: requestID,
+		Status:    status,
+	})
 }
 
 // UpdateSEOEnabled updates the SEO enabled status for a request

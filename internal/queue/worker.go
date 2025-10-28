@@ -51,6 +51,9 @@ func (l *slogAdapter) Fatal(args ...interface{}) {
 	log.Fatal(args...)
 }
 
+// EventPublisher is a function that publishes document update events
+type EventPublisher func(requestID string, status string)
+
 // Worker wraps the Asynq server for processing tasks
 type Worker struct {
 	server                  *asynq.Server
@@ -67,6 +70,7 @@ type Worker struct {
 	tombstonePeriodLowScore int // Days until deletion for low-score URLs
 	maxAnalysisWaitMinutes  int // Maximum minutes to wait for analysis retrieval before giving up
 	businessMetrics         *metrics.BusinessMetrics
+	eventPublisher          EventPublisher
 }
 
 // WorkerConfig contains configuration for the queue worker
@@ -88,6 +92,7 @@ func NewWorker(
 	queueClient *Client,
 	urlCache URLCache,
 	businessMetrics *metrics.BusinessMetrics,
+	eventPublisher EventPublisher,
 ) *Worker {
 	redisOpt := asynq.RedisClientOpt{
 		Addr: cfg.RedisAddr,
@@ -169,6 +174,7 @@ func NewWorker(
 		tombstonePeriodLowScore: cfg.TombstonePeriodLowScore,
 		maxAnalysisWaitMinutes:  maxAnalysisWait,
 		businessMetrics:         businessMetrics,
+		eventPublisher:          eventPublisher,
 	}
 
 	// Register task handlers

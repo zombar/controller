@@ -165,6 +165,7 @@ func main() {
 		queueClient,
 		urlCache,
 		handler.GetBusinessMetrics(), // Pass business metrics to worker
+		handler.PublishDocumentUpdate, // Pass event publisher for SSE
 	)
 	logger.Info("queue worker initialized",
 		"concurrency", cfg.WorkerConcurrency,
@@ -231,6 +232,16 @@ func main() {
 		if len(r.URL.Path) > len("/api/requests/") && r.URL.Path[len(r.URL.Path)-5:] == "/tags" {
 			if r.Method == http.MethodPut {
 				handler.UpdateRequestTags(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+			return
+		}
+
+		// Handle /api/requests/{id}/stream (SSE endpoint)
+		if len(r.URL.Path) > len("/api/requests/") && r.URL.Path[len(r.URL.Path)-7:] == "/stream" {
+			if r.Method == http.MethodGet {
+				handler.StreamRequestUpdates(w, r)
 			} else {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			}

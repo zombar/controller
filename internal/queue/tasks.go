@@ -734,6 +734,11 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 			req.Metadata["analysis_retrieval_elapsed_minutes"] = int(elapsedMinutes)
 			req.Metadata["textanalyzer_status"] = "failed"
 			w.storage.UpdateRequestMetadata(payload.RequestID, req.Metadata)
+
+			// Publish event for failed status
+			if w.eventPublisher != nil {
+				w.eventPublisher(payload.RequestID, "failed")
+			}
 		}
 		return nil // Return success to stop retrying
 	}
@@ -812,6 +817,11 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 
 	// Update textanalyzer status to completed
 	req.Metadata["textanalyzer_status"] = "completed"
+
+	// Publish event for completed status
+	if w.eventPublisher != nil {
+		w.eventPublisher(payload.RequestID, "completed")
+	}
 
 	// Apply two-tier tombstoning based on quality score
 	const (
