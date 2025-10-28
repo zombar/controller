@@ -732,6 +732,7 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 			}
 			req.Metadata["analysis_retrieval_timeout"] = true
 			req.Metadata["analysis_retrieval_elapsed_minutes"] = int(elapsedMinutes)
+			req.Metadata["textanalyzer_status"] = "failed"
 			w.storage.UpdateRequestMetadata(payload.RequestID, req.Metadata)
 		}
 		return nil // Return success to stop retrying
@@ -808,6 +809,9 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 	if scoreData, ok := result.Result["quality_score"].(map[string]interface{}); ok {
 		req.Metadata["quality_score"] = scoreData
 	}
+
+	// Update textanalyzer status to completed
+	req.Metadata["textanalyzer_status"] = "completed"
 
 	// Apply two-tier tombstoning based on quality score
 	const (
