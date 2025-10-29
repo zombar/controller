@@ -88,15 +88,25 @@ func (w *Worker) handleScrapeTask(ctx context.Context, t *asynq.Task) error {
 			}
 		}
 	} else {
-		// No trace context in payload, check current context
-		if existingSpan := trace.SpanFromContext(ctx); existingSpan.SpanContext().IsValid() {
-			existingSpan.SetAttributes(
+		// No trace context in payload, start a new independent trace
+		// This happens for child scrapes enqueued with context.Background()
+		ctx, span = otel.Tracer("controller").Start(ctx, "asynq.task.process",
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(
+				attribute.String("task.type", TypeScrapeURL),
 				attribute.String("scrape_request_id", jobID),
 				attribute.String("job.url", url),
 				attribute.Bool("job.extract_links", extractLinks),
 				attribute.Float64("queue.wait_time_seconds", queueWaitTime.Seconds()),
-			)
-		}
+				attribute.Int64("enqueued_at", payload.EnqueuedAt),
+			),
+		)
+		defer span.End()
+
+		// Record queue wait time event
+		span.AddEvent("task_processing_started", trace.WithAttributes(
+			attribute.Float64("wait_time_seconds", queueWaitTime.Seconds()),
+		))
 	}
 
 	// Update job status to processing
@@ -651,15 +661,24 @@ func (w *Worker) handleExtractLinksTask(ctx context.Context, t *asynq.Task) erro
 			}
 		}
 	} else {
-		// No trace context in payload, check current context
-		if existingSpan := trace.SpanFromContext(ctx); existingSpan.SpanContext().IsValid() {
-			existingSpan.SetAttributes(
+		// No trace context in payload, start a new independent trace
+		ctx, span = otel.Tracer("controller").Start(ctx, "asynq.task.process",
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(
+				attribute.String("task.type", TypeExtractLinks),
 				attribute.String("parent_job_id", payload.ParentJobID),
 				attribute.String("source_url", payload.SourceURL),
 				attribute.Int("parent_depth", payload.ParentDepth),
 				attribute.Float64("queue.wait_time_seconds", queueWaitTime.Seconds()),
-			)
-		}
+				attribute.Int64("enqueued_at", payload.EnqueuedAt),
+			),
+		)
+		defer span.End()
+
+		// Record queue wait time event
+		span.AddEvent("task_processing_started", trace.WithAttributes(
+			attribute.Float64("wait_time_seconds", queueWaitTime.Seconds()),
+		))
 	}
 
 	// Extract and queue links - this runs in its own task with its own context
@@ -761,15 +780,24 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 			}
 		}
 	} else {
-		// No trace context in payload, check current context
-		if existingSpan := trace.SpanFromContext(ctx); existingSpan.SpanContext().IsValid() {
-			existingSpan.SetAttributes(
+		// No trace context in payload, start a new independent trace
+		ctx, span = otel.Tracer("controller").Start(ctx, "asynq.task.process",
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(
+				attribute.String("task.type", TypeRetrieveAnalysis),
 				attribute.String("request_id", payload.RequestID),
 				attribute.String("analysis_job_id", payload.AnalysisJobID),
 				attribute.Int("attempt_count", payload.AttemptCount),
 				attribute.Float64("queue.wait_time_seconds", queueWaitTime.Seconds()),
-			)
-		}
+				attribute.Int64("enqueued_at", payload.EnqueuedAt),
+			),
+		)
+		defer span.End()
+
+		// Record queue wait time event
+		span.AddEvent("task_processing_started", trace.WithAttributes(
+			attribute.Float64("wait_time_seconds", queueWaitTime.Seconds()),
+		))
 	}
 
 	// If we've been retrying for too long, give up gracefully to prevent indefinite waiting

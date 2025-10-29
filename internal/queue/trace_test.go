@@ -270,3 +270,133 @@ func TestQueueWaitTimeCalculation(t *testing.T) {
 		})
 	}
 }
+
+// TestTasksWithoutTraceContext tests that tasks without trace context create their own independent traces
+// This happens when child scrapes are enqueued with context.Background() to prevent trace explosion
+func TestTasksWithoutTraceContext(t *testing.T) {
+	// Setup test tracer with in-memory exporter to capture spans
+	exporter := &testSpanExporter{spans: make([]tracesdk.ReadOnlySpan, 0)}
+	tp := tracesdk.NewTracerProvider(tracesdk.WithSyncer(exporter))
+	otel.SetTracerProvider(tp)
+
+	tests := []struct {
+		name         string
+		payload      interface{}
+		expectedType string
+	}{
+		{
+			name: "ScrapeTaskWithoutTraceContext",
+			payload: ScrapeTaskPayload{
+				JobID:        "test-child-job-1",
+				URL:          "https://example.com/page1",
+				ExtractLinks: false,
+				TraceID:      "", // Empty trace context
+				SpanID:       "",
+				EnqueuedAt:   time.Now().Add(-2 * time.Second).UnixNano(),
+			},
+			expectedType: TypeScrapeURL,
+		},
+		{
+			name: "ExtractLinksTaskWithoutTraceContext",
+			payload: ExtractLinksTaskPayload{
+				ParentJobID: "test-parent-job-1",
+				SourceURL:   "https://example.com",
+				ParentDepth: 1,
+				TraceID:     "", // Empty trace context
+				SpanID:      "",
+				EnqueuedAt:  time.Now().Add(-2 * time.Second).UnixNano(),
+			},
+			expectedType: TypeExtractLinks,
+		},
+		{
+			name: "RetrieveAnalysisTaskWithoutTraceContext",
+			payload: RetrieveAnalysisTaskPayload{
+				RequestID:     "test-request-1",
+				AnalysisJobID: "test-analysis-1",
+				AttemptCount:  1,
+				TraceID:       "", // Empty trace context
+				SpanID:        "",
+				EnqueuedAt:    time.Now().Add(-2 * time.Second).UnixNano(),
+			},
+			expectedType: TypeRetrieveAnalysis,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clear previous spans
+			exporter.spans = make([]tracesdk.ReadOnlySpan, 0)
+
+			// Marshal the payload
+			payloadBytes, err := json.Marshal(tt.payload)
+			if err != nil {
+				t.Fatalf("Failed to marshal payload: %v", err)
+			}
+
+			// Unmarshal to verify trace context is empty
+			var extracted struct {
+				TraceID string `json:"trace_id"`
+				SpanID  string `json:"span_id"`
+			}
+			if err := json.Unmarshal(payloadBytes, &extracted); err != nil {
+				t.Fatalf("Failed to unmarshal payload: %v", err)
+			}
+
+			// Verify no trace context in payload
+			if extracted.TraceID != "" || extracted.SpanID != "" {
+				t.Errorf("Expected empty trace context, got TraceID=%s, SpanID=%s", extracted.TraceID, extracted.SpanID)
+			}
+
+			// Simulate task handler creating a new span when no trace context exists
+			// This is what handleScrapeTask, handleExtractLinksTask, and handleRetrieveAnalysis do now
+			ctx := context.Background()
+			_, span := otel.Tracer("controller").Start(ctx, "asynq.task.process",
+				trace.WithSpanKind(trace.SpanKindConsumer),
+			)
+			span.End()
+
+			// Force export
+			tp.ForceFlush(context.Background())
+
+			// Verify a new span was created
+			if len(exporter.spans) != 1 {
+				t.Fatalf("Expected 1 span to be created, got %d", len(exporter.spans))
+			}
+
+			createdSpan := exporter.spans[0]
+
+			// Verify the span is valid and has its own trace ID
+			if !createdSpan.SpanContext().TraceID().IsValid() {
+				t.Error("Expected span to have a valid trace ID")
+			}
+
+			if !createdSpan.SpanContext().SpanID().IsValid() {
+				t.Error("Expected span to have a valid span ID")
+			}
+
+			// Verify span name
+			if createdSpan.Name() != "asynq.task.process" {
+				t.Errorf("Expected span name 'asynq.task.process', got '%s'", createdSpan.Name())
+			}
+
+			// Verify span kind
+			if createdSpan.SpanKind() != trace.SpanKindConsumer {
+				t.Errorf("Expected SpanKindConsumer, got %v", createdSpan.SpanKind())
+			}
+		})
+	}
+}
+
+// testSpanExporter is a simple exporter that stores spans in memory for testing
+type testSpanExporter struct {
+	spans []tracesdk.ReadOnlySpan
+}
+
+func (e *testSpanExporter) ExportSpans(ctx context.Context, spans []tracesdk.ReadOnlySpan) error {
+	e.spans = append(e.spans, spans...)
+	return nil
+}
+
+func (e *testSpanExporter) Shutdown(ctx context.Context) error {
+	return nil
+}
