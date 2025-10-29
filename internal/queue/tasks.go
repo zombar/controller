@@ -889,15 +889,21 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 		req.Metadata = make(map[string]interface{})
 	}
 
-	// Extract relevant fields from analysis result
+	// Ensure analyzer_metadata nested structure exists
+	if req.Metadata["analyzer_metadata"] == nil {
+		req.Metadata["analyzer_metadata"] = make(map[string]interface{})
+	}
+	analyzerMetadata := req.Metadata["analyzer_metadata"].(map[string]interface{})
+
+	// Extract relevant fields from analysis result and nest under analyzer_metadata
 	if tags, ok := result.Result["tags"].([]interface{}); ok {
-		req.Metadata["ai_tags"] = tags
+		analyzerMetadata["ai_tags"] = tags
 	}
 	if synopsis, ok := result.Result["synopsis"].(string); ok {
-		req.Metadata["synopsis"] = synopsis
+		analyzerMetadata["synopsis"] = synopsis
 	}
 	if cleanedText, ok := result.Result["cleaned_text"].(string); ok {
-		req.Metadata["cleaned_text"] = cleanedText
+		analyzerMetadata["cleaned_text"] = cleanedText
 	}
 	if scoreData, ok := result.Result["quality_score"].(map[string]interface{}); ok {
 		req.Metadata["quality_score"] = scoreData
