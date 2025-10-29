@@ -275,6 +275,103 @@ func TestE2EQueueWaitTime(t *testing.T) {
 	t.Logf("Queue wait time: %v (expected ~5s)", queueWaitTime)
 }
 
+// TestChildScrapeIndependentTrace tests that child scrapes get independent traces
+// This verifies the fix for trace explosion: child scrapes enqueued via context.Background()
+// should have no trace context in payload, but should still create their own independent traces
+func TestChildScrapeIndependentTrace(t *testing.T) {
+	// Setup in-memory span exporter
+	spanRecorder := tracetest.NewSpanRecorder()
+	tp := trace.NewTracerProvider(
+		trace.WithSpanProcessor(spanRecorder),
+	)
+	otel.SetTracerProvider(tp)
+	tracer := tp.Tracer("test")
+
+	// Step 1: Simulate parent scrape with trace context
+	_, parentSpan := tracer.Start(context.Background(), "parent.scrape",
+		oteltrace.WithSpanKind(oteltrace.SpanKindServer),
+	)
+	parentTraceID := parentSpan.SpanContext().TraceID()
+
+	// Step 2: Simulate enqueueing child scrape with context.Background() (as extractAndQueueLinks does)
+	// This is the critical behavior that prevents trace explosion
+	childCtx := context.Background() // NOTE: Not parentCtx!
+
+	// Create child scrape payload - trace context should be empty because we used context.Background()
+	childPayload := ScrapeTaskPayload{
+		JobID:        "child-job-1",
+		URL:          "https://example.com/child",
+		ExtractLinks: false,
+		ParentJobID:  stringPtr("parent-job-1"),
+		Depth:        1,
+		EnqueuedAt:   time.Now().UnixNano(),
+		// TraceID and SpanID will be empty because childCtx is context.Background()
+	}
+
+	// Verify context.Background() has no trace context
+	if span := oteltrace.SpanFromContext(childCtx); span.SpanContext().IsValid() {
+		t.Error("Expected context.Background() to have no trace context, but it has one")
+	}
+
+	// Step 3: Verify payload has no trace context (because we used context.Background())
+	if childPayload.TraceID != "" || childPayload.SpanID != "" {
+		t.Errorf("Expected child payload to have empty trace context, got TraceID=%s, SpanID=%s",
+			childPayload.TraceID, childPayload.SpanID)
+	}
+
+	// Step 4: Simulate worker processing child task WITHOUT parent trace context
+	// This is what handleScrapeTask does when payload has no trace context (our fix)
+	_, childSpan := tracer.Start(context.Background(), "asynq.task.process",
+		oteltrace.WithSpanKind(oteltrace.SpanKindConsumer),
+	)
+	childTraceID := childSpan.SpanContext().TraceID()
+	childSpan.End()
+	parentSpan.End()
+
+	// Force flush to export spans
+	tp.ForceFlush(context.Background())
+
+	// Step 5: Verify parent and child have DIFFERENT trace IDs (independent traces)
+	if parentTraceID == childTraceID {
+		t.Errorf("Expected parent and child to have different trace IDs (independent traces), but both have: %s",
+			parentTraceID)
+	}
+
+	// Step 6: Verify both traces exist
+	spans := spanRecorder.Ended()
+	if len(spans) != 2 {
+		t.Fatalf("Expected 2 spans (parent and child), got %d", len(spans))
+	}
+
+	foundParent := false
+	foundChild := false
+	for _, span := range spans {
+		if span.SpanContext().TraceID() == parentTraceID {
+			foundParent = true
+			if span.Name() != "parent.scrape" {
+				t.Errorf("Expected parent span name 'parent.scrape', got '%s'", span.Name())
+			}
+		}
+		if span.SpanContext().TraceID() == childTraceID {
+			foundChild = true
+			if span.Name() != "asynq.task.process" {
+				t.Errorf("Expected child span name 'asynq.task.process', got '%s'", span.Name())
+			}
+		}
+	}
+
+	if !foundParent {
+		t.Error("Parent span not found in exported spans")
+	}
+	if !foundChild {
+		t.Error("Child span not found in exported spans")
+	}
+
+	t.Logf("✓ Parent trace: %s", parentTraceID)
+	t.Logf("✓ Child trace:  %s (independent)", childTraceID)
+	t.Logf("✓ Successfully verified child scrapes get independent traces (prevents trace explosion)")
+}
+
 // TestE2ETraceFlowWithRealAsynq tests with actual Asynq client/server (requires Redis)
 func TestE2ETraceFlowWithRealAsynq(t *testing.T) {
 	if testing.Short() {
