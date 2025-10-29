@@ -114,6 +114,33 @@ func (h *Handler) updateMetrics() {
 		}
 		h.businessMetrics.ScrapeJobsByStatus.WithLabelValues(status).Set(float64(count))
 	}
+
+	// Update document statistics
+	if h.businessMetrics.DocumentsTotal != nil {
+		docStats, err := h.storage.GetDocumentStats()
+		if err != nil {
+			slog.Default().Error("failed to get document stats", "error", err)
+		} else {
+			// Update documents by type
+			for sourceType, count := range docStats.TotalByType {
+				h.businessMetrics.DocumentsTotal.WithLabelValues(sourceType).Set(float64(count))
+			}
+
+			// Update other document metrics
+			if h.businessMetrics.DocumentsWithTags != nil {
+				h.businessMetrics.DocumentsWithTags.Set(float64(docStats.TotalWithTags))
+			}
+			if h.businessMetrics.UniqueTagsTotal != nil {
+				h.businessMetrics.UniqueTagsTotal.Set(float64(docStats.UniqueTagsCount))
+			}
+			if h.businessMetrics.DocumentsWithSEO != nil {
+				h.businessMetrics.DocumentsWithSEO.Set(float64(docStats.TotalWithSEO))
+			}
+			if h.businessMetrics.TombstonesPending != nil {
+				h.businessMetrics.TombstonesPending.Set(float64(docStats.TotalTombstoned))
+			}
+		}
+	}
 }
 
 // ScrapeURLRequest represents a request to scrape a URL

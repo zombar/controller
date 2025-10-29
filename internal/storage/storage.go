@@ -950,3 +950,82 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 
 	return nil
 }
+
+// DocumentStats contains statistics about documents
+type DocumentStats struct {
+	TotalByType       map[string]int // count by source_type (url, text)
+	TotalWithTags     int            // documents with at least one tag
+	UniqueTagsCount   int            // total unique tags
+	TotalWithSEO      int            // documents with seo_enabled = true
+	TotalTombstoned   int            // documents currently tombstoned
+}
+
+// GetDocumentStats returns statistics about documents for Prometheus metrics
+func (s *Storage) GetDocumentStats() (*DocumentStats, error) {
+	stats := &DocumentStats{
+		TotalByType: make(map[string]int),
+	}
+
+	// Get total by source type
+	rows, err := s.db.Query(`
+		SELECT source_type, COUNT(*)
+		FROM requests
+		WHERE (metadata_json->>'tombstone_datetime' IS NULL OR (metadata_json->>'tombstone_datetime')::timestamp > NOW())
+		GROUP BY source_type
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count by source type: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var sourceType string
+		var count int
+		if err := rows.Scan(&sourceType, &count); err != nil {
+			return nil, fmt.Errorf("failed to scan source type count: %w", err)
+		}
+		stats.TotalByType[sourceType] = count
+	}
+
+	// Get documents with tags
+	err = s.db.QueryRow(`
+		SELECT COUNT(DISTINCT request_id)
+		FROM tags
+	`).Scan(&stats.TotalWithTags)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count documents with tags: %w", err)
+	}
+
+	// Get unique tags count
+	err = s.db.QueryRow(`
+		SELECT COUNT(DISTINCT tag)
+		FROM tags
+	`).Scan(&stats.UniqueTagsCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count unique tags: %w", err)
+	}
+
+	// Get documents with SEO enabled
+	err = s.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM requests
+		WHERE seo_enabled = true
+		AND (metadata_json->>'tombstone_datetime' IS NULL OR (metadata_json->>'tombstone_datetime')::timestamp > NOW())
+	`).Scan(&stats.TotalWithSEO)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count SEO enabled: %w", err)
+	}
+
+	// Get tombstoned documents
+	err = s.db.QueryRow(`
+		SELECT COUNT(*)
+		FROM requests
+		WHERE metadata_json->>'tombstone_datetime' IS NOT NULL
+		AND (metadata_json->>'tombstone_datetime')::timestamp <= NOW()
+	`).Scan(&stats.TotalTombstoned)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count tombstoned: %w", err)
+	}
+
+	return stats, nil
+}
