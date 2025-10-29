@@ -896,8 +896,16 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 	analyzerMetadata := req.Metadata["analyzer_metadata"].(map[string]interface{})
 
 	// Extract relevant fields from analysis result and nest under analyzer_metadata
+	var aiTags []string
 	if tags, ok := result.Result["tags"].([]interface{}); ok {
 		analyzerMetadata["ai_tags"] = tags
+
+		// Convert []interface{} to []string for merging
+		for _, tag := range tags {
+			if tagStr, ok := tag.(string); ok {
+				aiTags = append(aiTags, tagStr)
+			}
+		}
 	}
 	if synopsis, ok := result.Result["synopsis"].(string); ok {
 		analyzerMetadata["synopsis"] = synopsis
@@ -907,6 +915,45 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 	}
 	if scoreData, ok := result.Result["quality_score"].(map[string]interface{}); ok {
 		req.Metadata["quality_score"] = scoreData
+	}
+
+	// Merge AI tags with existing computed tags
+	if len(aiTags) > 0 {
+		// Create a map for case-insensitive duplicate checking
+		existingTags := make(map[string]bool)
+		for _, tag := range req.Tags {
+			existingTags[strings.ToLower(tag)] = true
+		}
+
+		// Add only new AI tags (case-insensitive comparison)
+		var tagsToAdd []string
+		for _, aiTag := range aiTags {
+			if !existingTags[strings.ToLower(aiTag)] {
+				tagsToAdd = append(tagsToAdd, aiTag)
+				existingTags[strings.ToLower(aiTag)] = true
+			}
+		}
+
+		// Merge new AI tags into request tags
+		if len(tagsToAdd) > 0 {
+			req.Tags = append(req.Tags, tagsToAdd...)
+
+			// Persist merged tags to database
+			if err := w.storage.UpdateRequestTags(payload.RequestID, req.Tags); err != nil {
+				w.logger.Error("failed to update request tags with AI tags",
+					"request_id", payload.RequestID,
+					"ai_tags", aiTags,
+					"error", err,
+				)
+				return fmt.Errorf("failed to update request tags: %w", err)
+			}
+
+			w.logger.Info("merged AI tags with computed tags",
+				"request_id", payload.RequestID,
+				"added_tags", tagsToAdd,
+				"total_tags", len(req.Tags),
+			)
+		}
 	}
 
 	// Update textanalyzer status to completed
