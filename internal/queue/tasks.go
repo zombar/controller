@@ -906,13 +906,6 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 	// Update textanalyzer status to completed
 	req.Metadata["textanalyzer_status"] = "completed"
 
-	// Publish event for completed status
-	if w.eventPublisherWithDetails != nil {
-		w.eventPublisherWithDetails(payload.RequestID, "enriched", "enriching", "Document enrichment completed", map[string]interface{}{
-			"quality_score": qualityScore,
-		})
-	}
-
 	// Apply two-tier tombstoning based on quality score
 	const (
 		SEVERE_QUALITY_THRESHOLD   = 0.25 // Below this: 7-day tombstone + SEOEnabled=false
@@ -970,6 +963,14 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 			)
 			return fmt.Errorf("failed to update SEO enabled: %w", err)
 		}
+	}
+
+	// Publish event for completed status AFTER database updates
+	// This ensures the frontend fetches the document with all the new data
+	if w.eventPublisherWithDetails != nil {
+		w.eventPublisherWithDetails(payload.RequestID, "enriched", "enriching", "Document enrichment completed", map[string]interface{}{
+			"quality_score": qualityScore,
+		})
 	}
 
 	w.logger.Info("request updated with analysis results",
