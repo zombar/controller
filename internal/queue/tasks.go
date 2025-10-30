@@ -913,6 +913,9 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 	if cleanedText, ok := result.Result["cleaned_text"].(string); ok {
 		analyzerMetadata["cleaned_text"] = cleanedText
 	}
+	if heuristicCleanedText, ok := result.Result["heuristic_cleaned_text"].(string); ok {
+		analyzerMetadata["heuristic_cleaned_text"] = heuristicCleanedText
+	}
 	if editorialAnalysis, ok := result.Result["editorial_analysis"].(string); ok {
 		analyzerMetadata["editorial_analysis"] = editorialAnalysis
 	}
