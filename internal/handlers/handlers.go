@@ -398,6 +398,24 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Enqueue analysis result retrieval task if text analysis was queued
+	if analyzerUUID != "" && h.queueClient != nil {
+		_, err := h.queueClient.EnqueueRetrieveAnalysis(r.Context(), controllerID, analyzerUUID, 0)
+		if err != nil {
+			// Log error but don't fail the request - retrieval can be retried manually if needed
+			slog.Warn("failed to enqueue analysis retrieval",
+				"request_id", controllerID,
+				"analysis_job_id", analyzerUUID,
+				"error", err,
+			)
+		} else {
+			slog.Info("enqueued analysis retrieval task",
+				"request_id", controllerID,
+				"analysis_job_id", analyzerUUID,
+			)
+		}
+	}
+
 	// Prepare response
 	response := ControllerResponse{
 		ID:               record.ID,

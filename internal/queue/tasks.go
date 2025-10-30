@@ -860,9 +860,11 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 
 	// Extract quality score and other metadata from result
 	qualityScore := 0.0
-	if scoreVal, ok := result.Result["quality_score"].(map[string]interface{}); ok {
-		if score, ok := scoreVal["score"].(float64); ok {
-			qualityScore = score
+	if result.Analysis != nil && result.Analysis.Metadata != nil {
+		if scoreVal, ok := result.Analysis.Metadata["quality_score"].(map[string]interface{}); ok {
+			if score, ok := scoreVal["score"].(float64); ok {
+				qualityScore = score
+			}
 		}
 	}
 
@@ -896,19 +898,27 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 	}
 	analyzerMetadata := req.Metadata["analyzer_metadata"].(map[string]interface{})
 
+	// Check if analysis result is available
+	if result.Analysis == nil || result.Analysis.Metadata == nil {
+		slog.Default().Warn("textanalyzer analysis not yet available",
+			"analysis_job_id", payload.AnalysisJobID,
+			"status", result.Status)
+		return fmt.Errorf("analysis not yet available: %s", result.Status)
+	}
+
 	// Debug: log what fields are in the result
 	slog.Default().Info("textanalyzer result fields",
 		"analysis_job_id", payload.AnalysisJobID,
-		"has_tags", result.Result["tags"] != nil,
-		"has_synopsis", result.Result["synopsis"] != nil,
-		"has_cleaned_text", result.Result["cleaned_text"] != nil,
-		"has_heuristic_cleaned_text", result.Result["heuristic_cleaned_text"] != nil,
-		"has_editorial_analysis", result.Result["editorial_analysis"] != nil,
-		"has_ai_detection", result.Result["ai_detection"] != nil)
+		"has_tags", result.Analysis.Metadata["tags"] != nil,
+		"has_synopsis", result.Analysis.Metadata["synopsis"] != nil,
+		"has_cleaned_text", result.Analysis.Metadata["cleaned_text"] != nil,
+		"has_heuristic_cleaned_text", result.Analysis.Metadata["heuristic_cleaned_text"] != nil,
+		"has_editorial_analysis", result.Analysis.Metadata["editorial_analysis"] != nil,
+		"has_ai_detection", result.Analysis.Metadata["ai_detection"] != nil)
 
 	// Extract relevant fields from analysis result and nest under analyzer_metadata
 	var aiTags []string
-	if tags, ok := result.Result["tags"].([]interface{}); ok {
+	if tags, ok := result.Analysis.Metadata["tags"].([]interface{}); ok {
 		analyzerMetadata["ai_tags"] = tags
 
 		// Convert []interface{} to []string for merging
@@ -918,22 +928,22 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 			}
 		}
 	}
-	if synopsis, ok := result.Result["synopsis"].(string); ok {
+	if synopsis, ok := result.Analysis.Metadata["synopsis"].(string); ok {
 		analyzerMetadata["synopsis"] = synopsis
 	}
-	if cleanedText, ok := result.Result["cleaned_text"].(string); ok {
+	if cleanedText, ok := result.Analysis.Metadata["cleaned_text"].(string); ok {
 		analyzerMetadata["cleaned_text"] = cleanedText
 	}
-	if heuristicCleanedText, ok := result.Result["heuristic_cleaned_text"].(string); ok {
+	if heuristicCleanedText, ok := result.Analysis.Metadata["heuristic_cleaned_text"].(string); ok {
 		analyzerMetadata["heuristic_cleaned_text"] = heuristicCleanedText
 	}
-	if editorialAnalysis, ok := result.Result["editorial_analysis"].(string); ok {
+	if editorialAnalysis, ok := result.Analysis.Metadata["editorial_analysis"].(string); ok {
 		analyzerMetadata["editorial_analysis"] = editorialAnalysis
 	}
-	if aiDetection, ok := result.Result["ai_detection"].(map[string]interface{}); ok {
+	if aiDetection, ok := result.Analysis.Metadata["ai_detection"].(map[string]interface{}); ok {
 		analyzerMetadata["ai_detection"] = aiDetection
 	}
-	if scoreData, ok := result.Result["quality_score"].(map[string]interface{}); ok {
+	if scoreData, ok := result.Analysis.Metadata["quality_score"].(map[string]interface{}); ok {
 		req.Metadata["quality_score"] = scoreData
 	}
 
