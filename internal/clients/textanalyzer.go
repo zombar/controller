@@ -179,7 +179,11 @@ type AnalysisJobResult struct {
 	JobID   string                 `json:"job_id"`
 	Status  string                 `json:"status"` // "queued", "processing", "completed", "failed"
 	Message string                 `json:"message,omitempty"`
-	Result  map[string]interface{} `json:"result,omitempty"` // Analysis metadata when completed
+	Analysis *struct {
+		ID       string                 `json:"id"`
+		Text     string                 `json:"text"`
+		Metadata map[string]interface{} `json:"metadata"`
+	} `json:"analysis,omitempty"` // Analysis result with metadata when completed
 }
 
 // GetAnalysisResult retrieves the result of a previously enqueued analysis job
