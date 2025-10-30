@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 	"time"
@@ -897,7 +898,7 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 
 	// Debug: log what fields are in the result
 	slog.Default().Info("textanalyzer result fields",
-		"analysis_id", analysisID,
+		"analysis_job_id", payload.AnalysisJobID,
 		"has_tags", result.Result["tags"] != nil,
 		"has_synopsis", result.Result["synopsis"] != nil,
 		"has_cleaned_text", result.Result["cleaned_text"] != nil,
