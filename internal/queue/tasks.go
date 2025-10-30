@@ -916,6 +916,34 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 		"has_editorial_analysis", result.Analysis.Metadata["editorial_analysis"] != nil,
 		"has_ai_detection", result.Analysis.Metadata["ai_detection"] != nil)
 
+	// Debug: Log the actual field types and lengths from textanalyzer response
+	if ct, ok := result.Analysis.Metadata["cleaned_text"].(string); ok {
+		slog.Default().Info("textanalyzer cleaned_text details",
+			"request_id", payload.RequestID,
+			"type", "string",
+			"length", len(ct),
+			"first_50", ct[:min(50, len(ct))],
+		)
+	} else {
+		slog.Default().Warn("cleaned_text is not a string or doesn't exist",
+			"request_id", payload.RequestID,
+			"value_type", fmt.Sprintf("%T", result.Analysis.Metadata["cleaned_text"]),
+		)
+	}
+	if hct, ok := result.Analysis.Metadata["heuristic_cleaned_text"].(string); ok {
+		slog.Default().Info("textanalyzer heuristic_cleaned_text details",
+			"request_id", payload.RequestID,
+			"type", "string",
+			"length", len(hct),
+			"first_50", hct[:min(50, len(hct))],
+		)
+	} else {
+		slog.Default().Warn("heuristic_cleaned_text is not a string or doesn't exist",
+			"request_id", payload.RequestID,
+			"value_type", fmt.Sprintf("%T", result.Analysis.Metadata["heuristic_cleaned_text"]),
+		)
+	}
+
 	// Extract relevant fields from analysis result and nest under analyzer_metadata
 	var aiTags []string
 	if tags, ok := result.Analysis.Metadata["tags"].([]interface{}); ok {
@@ -933,9 +961,19 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 	}
 	if cleanedText, ok := result.Analysis.Metadata["cleaned_text"].(string); ok {
 		analyzerMetadata["cleaned_text"] = cleanedText
+		slog.Default().Info("extracted cleaned_text from textanalyzer",
+			"request_id", payload.RequestID,
+			"length", len(cleanedText),
+			"first_100", cleanedText[:min(100, len(cleanedText))],
+		)
 	}
 	if heuristicCleanedText, ok := result.Analysis.Metadata["heuristic_cleaned_text"].(string); ok {
 		analyzerMetadata["heuristic_cleaned_text"] = heuristicCleanedText
+		slog.Default().Info("extracted heuristic_cleaned_text from textanalyzer",
+			"request_id", payload.RequestID,
+			"length", len(heuristicCleanedText),
+			"first_100", heuristicCleanedText[:min(100, len(heuristicCleanedText))],
+		)
 	}
 	if editorialAnalysis, ok := result.Analysis.Metadata["editorial_analysis"].(string); ok {
 		analyzerMetadata["editorial_analysis"] = editorialAnalysis
@@ -989,6 +1027,16 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 	// Update textanalyzer status to completed
 	req.Metadata["textanalyzer_status"] = "completed"
 
+	// Debug: Log what we're about to save
+	if am, ok := req.Metadata["analyzer_metadata"].(map[string]interface{}); ok {
+		slog.Default().Info("saving analyzer_metadata",
+			"request_id", payload.RequestID,
+			"heuristic_length", len(fmt.Sprintf("%v", am["heuristic_cleaned_text"])),
+			"cleaned_length", len(fmt.Sprintf("%v", am["cleaned_text"])),
+			"has_synopsis", am["synopsis"] != nil,
+		)
+	}
+
 	// Apply two-tier tombstoning based on quality score
 	const (
 		SEVERE_QUALITY_THRESHOLD   = 0.25 // Below this: 7-day tombstone + SEOEnabled=false
@@ -1025,6 +1073,29 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 		if req.SEOEnabled != seoEnabled {
 			seoEnabledChanged = true
 			req.SEOEnabled = seoEnabled
+		}
+	}
+
+	// Debug: Log analyzer_metadata BEFORE saving to database
+	if am, ok := req.Metadata["analyzer_metadata"].(map[string]interface{}); ok {
+		slog.Default().Info("BEFORE database save - analyzer_metadata contents",
+			"request_id", payload.RequestID,
+			"has_cleaned_text", am["cleaned_text"] != nil,
+			"has_heuristic_cleaned_text", am["heuristic_cleaned_text"] != nil,
+		)
+		if ct, ok := am["cleaned_text"].(string); ok {
+			slog.Default().Info("BEFORE save - cleaned_text",
+				"request_id", payload.RequestID,
+				"length", len(ct),
+				"first_100", ct[:min(100, len(ct))],
+			)
+		}
+		if hct, ok := am["heuristic_cleaned_text"].(string); ok {
+			slog.Default().Info("BEFORE save - heuristic_cleaned_text",
+				"request_id", payload.RequestID,
+				"length", len(hct),
+				"first_100", hct[:min(100, len(hct))],
+			)
 		}
 	}
 
