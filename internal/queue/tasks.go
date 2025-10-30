@@ -895,6 +895,16 @@ func (w *Worker) handleRetrieveAnalysis(ctx context.Context, t *asynq.Task) erro
 	}
 	analyzerMetadata := req.Metadata["analyzer_metadata"].(map[string]interface{})
 
+	// Debug: log what fields are in the result
+	slog.Default().Info("textanalyzer result fields",
+		"analysis_id", analysisID,
+		"has_tags", result.Result["tags"] != nil,
+		"has_synopsis", result.Result["synopsis"] != nil,
+		"has_cleaned_text", result.Result["cleaned_text"] != nil,
+		"has_heuristic_cleaned_text", result.Result["heuristic_cleaned_text"] != nil,
+		"has_editorial_analysis", result.Result["editorial_analysis"] != nil,
+		"has_ai_detection", result.Result["ai_detection"] != nil)
+
 	// Extract relevant fields from analysis result and nest under analyzer_metadata
 	var aiTags []string
 	if tags, ok := result.Result["tags"].([]interface{}); ok {
