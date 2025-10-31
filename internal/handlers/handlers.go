@@ -269,8 +269,10 @@ func (h *Handler) ScrapeURL(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Record tombstone metrics
-		h.businessMetrics.TombstonesCreatedTotal.WithLabelValues("low-score", "none").Inc()
-		h.businessMetrics.TombstoneDaysHistogram.WithLabelValues("low-score").Observe(float64(h.tombstonePeriodLowScore))
+		if h.businessMetrics != nil {
+			h.businessMetrics.TombstonesCreatedTotal.WithLabelValues("low-score", "none").Inc()
+			h.businessMetrics.TombstoneDaysHistogram.WithLabelValues("low-score").Observe(float64(h.tombstonePeriodLowScore))
+		}
 		slog.Info("tombstone created",
 			"reason", "low-score",
 			"url", req.URL,
@@ -956,8 +958,10 @@ func (h *Handler) TombstoneRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Record tombstone metrics
-	h.businessMetrics.TombstonesCreatedTotal.WithLabelValues("manual", "none").Inc()
-	h.businessMetrics.TombstoneDaysHistogram.WithLabelValues("manual").Observe(float64(h.tombstonePeriodManual))
+	if h.businessMetrics != nil {
+		h.businessMetrics.TombstonesCreatedTotal.WithLabelValues("manual", "none").Inc()
+		h.businessMetrics.TombstoneDaysHistogram.WithLabelValues("manual").Observe(float64(h.tombstonePeriodManual))
+	}
 	slog.Info("tombstone created",
 		"reason", "manual",
 		"request_id", id,
@@ -1396,7 +1400,9 @@ func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Record scrape request received
-	h.businessMetrics.ScrapeRequestsTotal.WithLabelValues("accepted").Inc()
+	if h.businessMetrics != nil {
+		h.businessMetrics.ScrapeRequestsTotal.WithLabelValues("accepted").Inc()
+	}
 
 	// Check cache for recently scraped URL
 	if h.urlCache != nil {
@@ -1407,7 +1413,9 @@ func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 		} else if cachedScraperUUID != "" {
 			// Cache hit - URL was scraped recently (within 30 days)
 			slog.Info("cache hit for URL", "url", req.URL, "scraper_uuid", cachedScraperUUID)
-			h.businessMetrics.ScrapeRequestsTotal.WithLabelValues("cached").Inc()
+			if h.businessMetrics != nil {
+				h.businessMetrics.ScrapeRequestsTotal.WithLabelValues("cached").Inc()
+			}
 
 			// Fetch the existing scraped data
 			existingData, err := h.storage.GetRequest(cachedScraperUUID)
@@ -1456,13 +1464,17 @@ func (h *Handler) CreateScrapeRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.storage.SaveScrapeJob(job); err != nil {
-		h.businessMetrics.ScrapeRequestsTotal.WithLabelValues("error").Inc()
+		if h.businessMetrics != nil {
+			h.businessMetrics.ScrapeRequestsTotal.WithLabelValues("error").Inc()
+		}
 		respondError(w, fmt.Sprintf("Failed to create scrape job: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	// Record scrape job created (parent job)
-	h.businessMetrics.ScrapeJobsTotal.WithLabelValues("parent").Inc()
+	if h.businessMetrics != nil {
+		h.businessMetrics.ScrapeJobsTotal.WithLabelValues("parent").Inc()
+	}
 
 	// Enqueue task to Asynq (skip if queueClient is nil for testing)
 	var taskID string

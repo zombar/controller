@@ -25,8 +25,8 @@ func setupTestDB(t *testing.T, testName string) (connStr string, cleanup func())
 	// Create a unique database name for this test
 	dbName := fmt.Sprintf("test_%s_%d", testName, time.Now().UnixNano())
 
-	// Connect to default 'postgres' database to create test database
-	adminConnStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=postgres sslmode=disable connect_timeout=5",
+	// Connect to 'docutab' database to create test database
+	adminConnStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=docutab sslmode=disable connect_timeout=5",
 		host, port, user, password)
 
 	adminDB, err := sql.Open("postgres", adminConnStr)
@@ -43,9 +43,9 @@ func setupTestDB(t *testing.T, testName string) (connStr string, cleanup func())
 	}
 
 	// Create test database
-	_, err = adminDB.Exec(fmt.Sprintf("CREATE DATABASE %s", dbName))
+	_, err = adminDB.Exec(fmt.Sprintf("CREATE DATABASE \"%s\"", dbName))
 	if err != nil {
-		t.Skipf("Could not create test database: %v", err)
+		t.Fatalf("Could not create test database %s: %v", dbName, err)
 		return "", func() {}
 	}
 

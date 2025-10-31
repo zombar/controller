@@ -72,7 +72,7 @@ build-all: ## Build for multiple platforms
 # Run all tests
 test: ## Run all tests
 	@echo "Running tests..."
-	@go test -timeout 120s -v ./...
+	@TEST_DB_HOST=localhost TEST_DB_PORT=5432 TEST_DB_USER=docutab TEST_DB_PASSWORD=docutab_dev_pass go test -timeout 120s -v ./...
 
 # Run only fast tests
 test-short: ## Run only fast tests (skip slow integration tests)
