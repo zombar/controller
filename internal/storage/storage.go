@@ -1138,8 +1138,17 @@ func (s *Storage) GetTagTimeline(startDate, endDate time.Time, bucketDuration ti
 	}
 	defer rows.Close()
 
-	// Build buckets map
-	bucketsMap := make(map[time.Time][]TagEntry)
+	// Build buckets map using string keys to avoid timestamp precision issues
+	type bucketKey struct {
+		year  int
+		month int
+		day   int
+		hour  int
+	}
+	bucketsMap := make(map[bucketKey]struct {
+		timestamp time.Time
+		tags      []TagEntry
+	})
 	allTags := make(map[string]bool)
 
 	for rows.Next() {
@@ -1165,7 +1174,20 @@ func (s *Storage) GetTagTimeline(startDate, endDate time.Time, bucketDuration ti
 			SizeFactor:     sizeFactor,
 		}
 
-		bucketsMap[bucketStart] = append(bucketsMap[bucketStart], entry)
+		// Use rounded hour as key to avoid timestamp precision issues
+		key := bucketKey{
+			year:  bucketStart.Year(),
+			month: int(bucketStart.Month()),
+			day:   bucketStart.Day(),
+			hour:  bucketStart.Hour(),
+		}
+
+		bucket := bucketsMap[key]
+		if bucket.timestamp.IsZero() {
+			bucket.timestamp = bucketStart
+		}
+		bucket.tags = append(bucket.tags, entry)
+		bucketsMap[key] = bucket
 		allTags[tag] = true
 	}
 
@@ -1173,14 +1195,21 @@ func (s *Storage) GetTagTimeline(startDate, endDate time.Time, bucketDuration ti
 		return nil, fmt.Errorf("error iterating tag timeline rows: %w", err)
 	}
 
-	// Convert map to sorted slice
+	// Convert map to sorted slice by generating all expected buckets
 	var buckets []TagBucket
 	currentTime := startDate
 	for i := 0; i < numBuckets; i++ {
+		key := bucketKey{
+			year:  currentTime.Year(),
+			month: int(currentTime.Month()),
+			day:   currentTime.Day(),
+			hour:  currentTime.Hour(),
+		}
+
 		bucket := TagBucket{
 			Timestamp:   currentTime,
 			DurationSec: int(bucketDuration.Seconds()),
-			Tags:        bucketsMap[currentTime],
+			Tags:        bucketsMap[key].tags,
 		}
 		if bucket.Tags == nil {
 			bucket.Tags = []TagEntry{} // Empty array instead of null

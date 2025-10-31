@@ -97,7 +97,7 @@ func TestUpdateRequestTags_AutoTombstone_LowQuality(t *testing.T) {
 		reason, ok := reasonRaw.(string)
 		if !ok {
 			t.Errorf("Expected tombstone_reason to be string, got %T", reasonRaw)
-		} else if reason != "auto-tombstone: low-quality or sparse-content tag" {
+		} else if reason != "auto-tombstone: low-quality tag" {
 			t.Errorf("Expected specific tombstone_reason, got: %s", reason)
 		}
 	}

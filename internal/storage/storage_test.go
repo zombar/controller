@@ -100,6 +100,7 @@ func TestSaveTextRequest(t *testing.T) {
 		TextAnalyzerUUID: "analyzer-456",
 		Tags:             []string{"text-tag1", "text-tag2"},
 		SEOEnabled:       false, // SEO typically disabled for text-based requests
+		Metadata:         map[string]interface{}{},
 	}
 
 	if err := store.SaveRequest(req); err != nil {
@@ -140,6 +141,8 @@ func TestSearchByTags(t *testing.T) {
 			SourceType:       "text",
 			TextAnalyzerUUID: "analyzer-1",
 			Tags:             []string{"golang", "programming", "backend"},
+			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 		{
 			ID:               "req-2",
@@ -147,6 +150,8 @@ func TestSearchByTags(t *testing.T) {
 			SourceType:       "text",
 			TextAnalyzerUUID: "analyzer-2",
 			Tags:             []string{"python", "programming", "data-science"},
+			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 		{
 			ID:               "req-3",
@@ -154,6 +159,8 @@ func TestSearchByTags(t *testing.T) {
 			SourceType:       "text",
 			TextAnalyzerUUID: "analyzer-3",
 			Tags:             []string{"javascript", "frontend", "web"},
+			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 	}
 
@@ -218,6 +225,8 @@ func TestListRequests(t *testing.T) {
 			SourceType:       "text",
 			TextAnalyzerUUID: fmt.Sprintf("analyzer-%d", i),
 			Tags:             []string{"tag1"},
+			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		}
 		if err := store.SaveRequest(req); err != nil {
 			t.Fatalf("Failed to save request %d: %v", i, err)
@@ -360,6 +369,7 @@ func TestDeleteRequest(t *testing.T) {
 		SourceType:       "text",
 		TextAnalyzerUUID: "analyzer-1",
 		Tags:             []string{"tag1", "tag2", "tag3"},
+		Metadata:         map[string]interface{}{},
 	}
 
 	if err := store.SaveRequest(req); err != nil {
@@ -798,6 +808,7 @@ func TestUpdateSEOEnabled(t *testing.T) {
 		Tags:             []string{"test"},
 		Slug:             &slug,
 		SEOEnabled:       false,
+		Metadata:         map[string]interface{}{},
 	}
 
 	if err := store.SaveRequest(req); err != nil {
@@ -950,6 +961,7 @@ func TestSlugUniqueness(t *testing.T) {
 		Tags:             []string{"test"},
 		Slug:             &slug,
 		SEOEnabled:       true,
+		Metadata:         map[string]interface{}{},
 	}
 
 	if err := store.SaveRequest(req1); err != nil {
@@ -969,6 +981,7 @@ func TestSlugUniqueness(t *testing.T) {
 		Tags:             []string{"test"},
 		Slug:             &slug, // Same slug
 		SEOEnabled:       true,
+		Metadata:         map[string]interface{}{},
 	}
 
 	// This should fail due to unique constraint on slug
@@ -1039,6 +1052,7 @@ func TestGetTagTimeline_SingleBucket(t *testing.T) {
 			TextAnalyzerUUID: "analyzer-1",
 			Tags:             []string{"politics", "news"},
 			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 		{
 			ID:               "doc-2",
@@ -1048,6 +1062,7 @@ func TestGetTagTimeline_SingleBucket(t *testing.T) {
 			TextAnalyzerUUID: "analyzer-2",
 			Tags:             []string{"politics", "economy"},
 			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 		{
 			ID:               "doc-3",
@@ -1057,6 +1072,7 @@ func TestGetTagTimeline_SingleBucket(t *testing.T) {
 			TextAnalyzerUUID: "analyzer-3",
 			Tags:             []string{"politics", "tech"},
 			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 	}
 
@@ -1141,6 +1157,7 @@ func TestGetTagTimeline_MultipleBuckets(t *testing.T) {
 			TextAnalyzerUUID: "analyzer-1",
 			Tags:             []string{"morning", "news"},
 			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 		{
 			ID:               "doc-2",
@@ -1150,6 +1167,7 @@ func TestGetTagTimeline_MultipleBuckets(t *testing.T) {
 			TextAnalyzerUUID: "analyzer-2",
 			Tags:             []string{"morning", "weather"},
 			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 		// Hour 2: 1 doc with "afternoon" tag
 		{
@@ -1160,6 +1178,7 @@ func TestGetTagTimeline_MultipleBuckets(t *testing.T) {
 			TextAnalyzerUUID: "analyzer-3",
 			Tags:             []string{"afternoon", "news"},
 			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 		// Hour 3: 3 docs with "evening" tag
 		{
@@ -1170,6 +1189,7 @@ func TestGetTagTimeline_MultipleBuckets(t *testing.T) {
 			TextAnalyzerUUID: "analyzer-4",
 			Tags:             []string{"evening", "politics"},
 			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 		{
 			ID:               "doc-5",
@@ -1179,6 +1199,7 @@ func TestGetTagTimeline_MultipleBuckets(t *testing.T) {
 			TextAnalyzerUUID: "analyzer-5",
 			Tags:             []string{"evening", "sports"},
 			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 		{
 			ID:               "doc-6",
@@ -1188,6 +1209,7 @@ func TestGetTagTimeline_MultipleBuckets(t *testing.T) {
 			TextAnalyzerUUID: "analyzer-6",
 			Tags:             []string{"evening", "tech"},
 			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 	}
 
@@ -1268,6 +1290,7 @@ func TestGetTagTimeline_MaxTagsPerBucket(t *testing.T) {
 		TextAnalyzerUUID: "analyzer-1",
 		Tags:             []string{"tag1", "tag2", "tag3", "tag4", "tag5", "tag6", "tag7", "tag8", "tag9", "tag10"},
 		SEOEnabled:       true,
+		Metadata:         map[string]interface{}{},
 	}
 
 	if err := store.SaveRequest(req); err != nil {
@@ -1319,6 +1342,7 @@ func TestGetTagTimeline_ExcludesTombstonedAndSEODisabled(t *testing.T) {
 			TextAnalyzerUUID: "analyzer-1",
 			Tags:             []string{"valid"},
 			SEOEnabled:       true,
+			Metadata:         map[string]interface{}{},
 		},
 		// SEO disabled
 		{
@@ -1329,6 +1353,7 @@ func TestGetTagTimeline_ExcludesTombstonedAndSEODisabled(t *testing.T) {
 			TextAnalyzerUUID: "analyzer-2",
 			Tags:             []string{"seo-disabled"},
 			SEOEnabled:       false,
+			Metadata:         map[string]interface{}{},
 		},
 		// Tombstoned (tombstone in the past)
 		{
