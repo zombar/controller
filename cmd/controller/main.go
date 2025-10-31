@@ -194,6 +194,7 @@ func main() {
 	mux.HandleFunc("/api/images/search", handler.SearchImageTags)
 	mux.HandleFunc("/api/requests/filter", handler.FilterRequests)
 	mux.HandleFunc("/api/extract-links", handler.ExtractLinks)
+	mux.HandleFunc("/api/tags/timeline", handler.GetTagTimeline)
 	mux.HandleFunc("/api/requests/", func(w http.ResponseWriter, r *http.Request) {
 		// Redirect /api/requests/filter to dedicated handler
 		if r.URL.Path == "/api/requests/filter" {

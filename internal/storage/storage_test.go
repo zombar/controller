@@ -977,3 +977,428 @@ func TestSlugUniqueness(t *testing.T) {
 		t.Error("Expected error when saving duplicate slug, but got none")
 	}
 }
+
+// TestGetTagTimeline_EmptyDatabase verifies behavior with no documents
+func TestGetTagTimeline_EmptyDatabase(t *testing.T) {
+	connStr, cleanup := setupTestDB(t, "test_tag_timeline_empty")
+	defer cleanup()
+
+	store, err := New(connStr, []string{}, 30, 90, 90)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	startDate := time.Date(2025, 10, 1, 0, 0, 0, 0, time.UTC)
+	endDate := time.Date(2025, 10, 2, 0, 0, 0, 0, time.UTC)
+	bucketDuration := 6 * time.Hour
+
+	timeline, err := store.GetTagTimeline(startDate, endDate, bucketDuration, 20)
+	if err != nil {
+		t.Fatalf("GetTagTimeline failed: %v", err)
+	}
+
+	if timeline.Stats.TotalDocuments != 0 {
+		t.Errorf("Expected 0 documents, got %d", timeline.Stats.TotalDocuments)
+	}
+	if timeline.Stats.TotalUniqueTags != 0 {
+		t.Errorf("Expected 0 unique tags, got %d", timeline.Stats.TotalUniqueTags)
+	}
+	if len(timeline.Buckets) != 4 { // 24 hours / 6 hours = 4 buckets
+		t.Errorf("Expected 4 buckets, got %d", len(timeline.Buckets))
+	}
+
+	// All buckets should be empty
+	for i, bucket := range timeline.Buckets {
+		if len(bucket.Tags) != 0 {
+			t.Errorf("Bucket %d: expected 0 tags, got %d", i, len(bucket.Tags))
+		}
+	}
+}
+
+// TestGetTagTimeline_SingleBucket verifies tag frequency calculation in a single bucket
+func TestGetTagTimeline_SingleBucket(t *testing.T) {
+	connStr, cleanup := setupTestDB(t, "test_tag_timeline_single")
+	defer cleanup()
+
+	store, err := New(connStr, []string{}, 30, 90, 90)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	baseTime := time.Date(2025, 10, 30, 12, 0, 0, 0, time.UTC)
+
+	// Create documents with different tags
+	requests := []*Request{
+		{
+			ID:               "doc-1",
+			CreatedAt:        baseTime,
+			EffectiveDate:    baseTime,
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-1",
+			Tags:             []string{"politics", "news"},
+			SEOEnabled:       true,
+		},
+		{
+			ID:               "doc-2",
+			CreatedAt:        baseTime.Add(10 * time.Minute),
+			EffectiveDate:    baseTime.Add(10 * time.Minute),
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-2",
+			Tags:             []string{"politics", "economy"},
+			SEOEnabled:       true,
+		},
+		{
+			ID:               "doc-3",
+			CreatedAt:        baseTime.Add(20 * time.Minute),
+			EffectiveDate:    baseTime.Add(20 * time.Minute),
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-3",
+			Tags:             []string{"politics", "tech"},
+			SEOEnabled:       true,
+		},
+	}
+
+	for _, req := range requests {
+		if err := store.SaveRequest(req); err != nil {
+			t.Fatalf("Failed to save request: %v", err)
+		}
+	}
+
+	// Query with a 1-hour bucket covering all documents
+	startDate := baseTime.Add(-10 * time.Minute)
+	endDate := baseTime.Add(50 * time.Minute)
+	bucketDuration := 1 * time.Hour
+
+	timeline, err := store.GetTagTimeline(startDate, endDate, bucketDuration, 20)
+	if err != nil {
+		t.Fatalf("GetTagTimeline failed: %v", err)
+	}
+
+	if timeline.Stats.TotalDocuments != 3 {
+		t.Errorf("Expected 3 documents, got %d", timeline.Stats.TotalDocuments)
+	}
+	if timeline.Stats.TotalUniqueTags != 4 { // politics, news, economy, tech
+		t.Errorf("Expected 4 unique tags, got %d", timeline.Stats.TotalUniqueTags)
+	}
+
+	if len(timeline.Buckets) != 1 {
+		t.Fatalf("Expected 1 bucket, got %d", len(timeline.Buckets))
+	}
+
+	bucket := timeline.Buckets[0]
+	if len(bucket.Tags) != 4 {
+		t.Fatalf("Expected 4 tags in bucket, got %d", len(bucket.Tags))
+	}
+
+	// Verify politics is the most popular (appears in 3 docs)
+	politicsTag := bucket.Tags[0]
+	if politicsTag.Tag != "politics" {
+		t.Errorf("Expected first tag to be 'politics', got '%s'", politicsTag.Tag)
+	}
+	if politicsTag.Count != 3 {
+		t.Errorf("Expected politics to have count 3, got %d", politicsTag.Count)
+	}
+	if politicsTag.PopularityScore != 1.0 {
+		t.Errorf("Expected politics to have popularity 1.0, got %f", politicsTag.PopularityScore)
+	}
+
+	// Other tags should have count 1 and popularity score 1/3
+	for i := 1; i < len(bucket.Tags); i++ {
+		tag := bucket.Tags[i]
+		if tag.Count != 1 {
+			t.Errorf("Expected tag '%s' to have count 1, got %d", tag.Tag, tag.Count)
+		}
+		expectedPopularity := 1.0 / 3.0
+		if abs(tag.PopularityScore-expectedPopularity) > 0.01 {
+			t.Errorf("Expected tag '%s' to have popularity ~%.3f, got %.3f", tag.Tag, expectedPopularity, tag.PopularityScore)
+		}
+	}
+}
+
+// TestGetTagTimeline_MultipleBuckets verifies distribution across time buckets
+func TestGetTagTimeline_MultipleBuckets(t *testing.T) {
+	connStr, cleanup := setupTestDB(t, "test_tag_timeline_multiple")
+	defer cleanup()
+
+	store, err := New(connStr, []string{}, 30, 90, 90)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	baseTime := time.Date(2025, 10, 30, 0, 0, 0, 0, time.UTC)
+
+	// Create documents across 3 hours (3 buckets with 1-hour buckets)
+	requests := []*Request{
+		// Hour 1: 2 docs with "morning" tag
+		{
+			ID:               "doc-1",
+			CreatedAt:        baseTime.Add(10 * time.Minute),
+			EffectiveDate:    baseTime.Add(10 * time.Minute),
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-1",
+			Tags:             []string{"morning", "news"},
+			SEOEnabled:       true,
+		},
+		{
+			ID:               "doc-2",
+			CreatedAt:        baseTime.Add(30 * time.Minute),
+			EffectiveDate:    baseTime.Add(30 * time.Minute),
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-2",
+			Tags:             []string{"morning", "weather"},
+			SEOEnabled:       true,
+		},
+		// Hour 2: 1 doc with "afternoon" tag
+		{
+			ID:               "doc-3",
+			CreatedAt:        baseTime.Add(1*time.Hour + 15*time.Minute),
+			EffectiveDate:    baseTime.Add(1*time.Hour + 15*time.Minute),
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-3",
+			Tags:             []string{"afternoon", "news"},
+			SEOEnabled:       true,
+		},
+		// Hour 3: 3 docs with "evening" tag
+		{
+			ID:               "doc-4",
+			CreatedAt:        baseTime.Add(2*time.Hour + 5*time.Minute),
+			EffectiveDate:    baseTime.Add(2*time.Hour + 5*time.Minute),
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-4",
+			Tags:             []string{"evening", "politics"},
+			SEOEnabled:       true,
+		},
+		{
+			ID:               "doc-5",
+			CreatedAt:        baseTime.Add(2*time.Hour + 25*time.Minute),
+			EffectiveDate:    baseTime.Add(2*time.Hour + 25*time.Minute),
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-5",
+			Tags:             []string{"evening", "sports"},
+			SEOEnabled:       true,
+		},
+		{
+			ID:               "doc-6",
+			CreatedAt:        baseTime.Add(2*time.Hour + 45*time.Minute),
+			EffectiveDate:    baseTime.Add(2*time.Hour + 45*time.Minute),
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-6",
+			Tags:             []string{"evening", "tech"},
+			SEOEnabled:       true,
+		},
+	}
+
+	for _, req := range requests {
+		if err := store.SaveRequest(req); err != nil {
+			t.Fatalf("Failed to save request: %v", err)
+		}
+	}
+
+	// Query with 1-hour buckets
+	startDate := baseTime
+	endDate := baseTime.Add(3 * time.Hour)
+	bucketDuration := 1 * time.Hour
+
+	timeline, err := store.GetTagTimeline(startDate, endDate, bucketDuration, 20)
+	if err != nil {
+		t.Fatalf("GetTagTimeline failed: %v", err)
+	}
+
+	if timeline.Stats.TotalDocuments != 6 {
+		t.Errorf("Expected 6 documents, got %d", timeline.Stats.TotalDocuments)
+	}
+
+	if len(timeline.Buckets) != 3 {
+		t.Fatalf("Expected 3 buckets, got %d", len(timeline.Buckets))
+	}
+
+	// Verify bucket 1 (morning): 2 docs, "morning" most popular
+	bucket1 := timeline.Buckets[0]
+	if len(bucket1.Tags) < 1 {
+		t.Fatal("Expected at least 1 tag in bucket 1")
+	}
+	if bucket1.Tags[0].Tag != "morning" {
+		t.Errorf("Bucket 1: expected 'morning' tag first, got '%s'", bucket1.Tags[0].Tag)
+	}
+	if bucket1.Tags[0].Count != 2 {
+		t.Errorf("Bucket 1: expected 'morning' count 2, got %d", bucket1.Tags[0].Count)
+	}
+
+	// Verify bucket 2 (afternoon): 1 doc
+	bucket2 := timeline.Buckets[1]
+	if len(bucket2.Tags) < 1 {
+		t.Fatal("Expected at least 1 tag in bucket 2")
+	}
+
+	// Verify bucket 3 (evening): 3 docs, "evening" most popular
+	bucket3 := timeline.Buckets[2]
+	if len(bucket3.Tags) < 1 {
+		t.Fatal("Expected at least 1 tag in bucket 3")
+	}
+	if bucket3.Tags[0].Tag != "evening" {
+		t.Errorf("Bucket 3: expected 'evening' tag first, got '%s'", bucket3.Tags[0].Tag)
+	}
+	if bucket3.Tags[0].Count != 3 {
+		t.Errorf("Bucket 3: expected 'evening' count 3, got %d", bucket3.Tags[0].Count)
+	}
+}
+
+// TestGetTagTimeline_MaxTagsPerBucket verifies max_tags limiting
+func TestGetTagTimeline_MaxTagsPerBucket(t *testing.T) {
+	connStr, cleanup := setupTestDB(t, "test_tag_timeline_max_tags")
+	defer cleanup()
+
+	store, err := New(connStr, []string{}, 30, 90, 90)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	baseTime := time.Date(2025, 10, 30, 12, 0, 0, 0, time.UTC)
+
+	// Create a document with 10 different tags
+	req := &Request{
+		ID:               "doc-many-tags",
+		CreatedAt:        baseTime,
+		EffectiveDate:    baseTime,
+		SourceType:       "url",
+		TextAnalyzerUUID: "analyzer-1",
+		Tags:             []string{"tag1", "tag2", "tag3", "tag4", "tag5", "tag6", "tag7", "tag8", "tag9", "tag10"},
+		SEOEnabled:       true,
+	}
+
+	if err := store.SaveRequest(req); err != nil {
+		t.Fatalf("Failed to save request: %v", err)
+	}
+
+	// Query with max_tags = 5
+	startDate := baseTime.Add(-10 * time.Minute)
+	endDate := baseTime.Add(10 * time.Minute)
+	bucketDuration := 1 * time.Hour
+	maxTags := 5
+
+	timeline, err := store.GetTagTimeline(startDate, endDate, bucketDuration, maxTags)
+	if err != nil {
+		t.Fatalf("GetTagTimeline failed: %v", err)
+	}
+
+	if len(timeline.Buckets) != 1 {
+		t.Fatalf("Expected 1 bucket, got %d", len(timeline.Buckets))
+	}
+
+	bucket := timeline.Buckets[0]
+	if len(bucket.Tags) > maxTags {
+		t.Errorf("Expected at most %d tags, got %d", maxTags, len(bucket.Tags))
+	}
+}
+
+// TestGetTagTimeline_ExcludesTombstonedAndSEODisabled verifies filtering
+func TestGetTagTimeline_ExcludesTombstonedAndSEODisabled(t *testing.T) {
+	connStr, cleanup := setupTestDB(t, "test_tag_timeline_filtering")
+	defer cleanup()
+
+	store, err := New(connStr, []string{}, 30, 90, 90)
+	if err != nil {
+		t.Fatalf("Failed to create storage: %v", err)
+	}
+	defer store.Close()
+
+	baseTime := time.Date(2025, 10, 30, 12, 0, 0, 0, time.UTC)
+	futureTime := baseTime.Add(48 * time.Hour)
+
+	requests := []*Request{
+		// Valid document
+		{
+			ID:               "doc-valid",
+			CreatedAt:        baseTime,
+			EffectiveDate:    baseTime,
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-1",
+			Tags:             []string{"valid"},
+			SEOEnabled:       true,
+		},
+		// SEO disabled
+		{
+			ID:               "doc-seo-disabled",
+			CreatedAt:        baseTime.Add(5 * time.Minute),
+			EffectiveDate:    baseTime.Add(5 * time.Minute),
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-2",
+			Tags:             []string{"seo-disabled"},
+			SEOEnabled:       false,
+		},
+		// Tombstoned (tombstone in the past)
+		{
+			ID:               "doc-tombstoned",
+			CreatedAt:        baseTime.Add(10 * time.Minute),
+			EffectiveDate:    baseTime.Add(10 * time.Minute),
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-3",
+			Tags:             []string{"tombstoned"},
+			SEOEnabled:       true,
+			Metadata: map[string]interface{}{
+				"tombstone_datetime": baseTime.Add(-1 * time.Hour).Format(time.RFC3339),
+			},
+		},
+		// Not yet tombstoned (tombstone in future)
+		{
+			ID:               "doc-future-tombstone",
+			CreatedAt:        baseTime.Add(15 * time.Minute),
+			EffectiveDate:    baseTime.Add(15 * time.Minute),
+			SourceType:       "url",
+			TextAnalyzerUUID: "analyzer-4",
+			Tags:             []string{"future-tombstone"},
+			SEOEnabled:       true,
+			Metadata: map[string]interface{}{
+				"tombstone_datetime": futureTime.Format(time.RFC3339),
+			},
+		},
+	}
+
+	for _, req := range requests {
+		if err := store.SaveRequest(req); err != nil {
+			t.Fatalf("Failed to save request: %v", err)
+		}
+	}
+
+	// Query timeline
+	startDate := baseTime.Add(-10 * time.Minute)
+	endDate := baseTime.Add(30 * time.Minute)
+	bucketDuration := 1 * time.Hour
+
+	timeline, err := store.GetTagTimeline(startDate, endDate, bucketDuration, 20)
+	if err != nil {
+		t.Fatalf("GetTagTimeline failed: %v", err)
+	}
+
+	// Should only include "valid" and "future-tombstone" documents
+	if timeline.Stats.TotalDocuments != 2 {
+		t.Errorf("Expected 2 documents (valid + future-tombstone), got %d", timeline.Stats.TotalDocuments)
+	}
+
+	// Check that excluded tags don't appear
+	if len(timeline.Buckets) != 1 {
+		t.Fatalf("Expected 1 bucket, got %d", len(timeline.Buckets))
+	}
+
+	bucket := timeline.Buckets[0]
+	for _, tagEntry := range bucket.Tags {
+		if tagEntry.Tag == "seo-disabled" {
+			t.Error("SEO-disabled document should not appear in timeline")
+		}
+		if tagEntry.Tag == "tombstoned" {
+			t.Error("Tombstoned document should not appear in timeline")
+		}
+	}
+}
+
+// Helper function for floating point comparison
+func abs(x float64) float64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}

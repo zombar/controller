@@ -1029,3 +1029,189 @@ func (s *Storage) GetDocumentStats() (*DocumentStats, error) {
 
 	return stats, nil
 }
+
+// TagTimeline structs for tag distribution over time
+
+// TagBucket represents a time bucket with its tag distribution
+type TagBucket struct {
+	Timestamp      time.Time  `json:"timestamp"`
+	DurationSec    int        `json:"duration_seconds"`
+	Tags           []TagEntry `json:"tags"`
+}
+
+// TagEntry represents a single tag's statistics in a time bucket
+type TagEntry struct {
+	Tag            string  `json:"tag"`
+	Count          int     `json:"count"`
+	PopularityScore float64 `json:"popularity_score"` // 0-1, relative to max in bucket
+	SizeFactor     float64 `json:"size_factor"`      // 0.5-2.0, for visual sizing
+}
+
+// TagTimelineResponse is the complete response for tag timeline requests
+type TagTimelineResponse struct {
+	Buckets []TagBucket      `json:"buckets"`
+	Stats   TagTimelineStats `json:"stats"`
+}
+
+// TagTimelineStats contains aggregate statistics for the timeline
+type TagTimelineStats struct {
+	TotalDocuments  int `json:"total_documents"`
+	TotalUniqueTags int `json:"total_unique_tags"`
+	BucketCount     int `json:"bucket_count"`
+}
+
+// GetTagTimeline calculates tag frequency distribution over time buckets
+// This provides an efficient way to visualize tag trends without sending all documents to the client
+func (s *Storage) GetTagTimeline(startDate, endDate time.Time, bucketDuration time.Duration, maxTagsPerBucket int) (*TagTimelineResponse, error) {
+	// Calculate number of buckets
+	totalDuration := endDate.Sub(startDate)
+	numBuckets := int(totalDuration / bucketDuration)
+	if numBuckets == 0 {
+		numBuckets = 1
+	}
+
+	// Cap the number of buckets to prevent excessive queries
+	if numBuckets > 1000 {
+		numBuckets = 1000
+		bucketDuration = totalDuration / time.Duration(numBuckets)
+	}
+
+	// Query to get tag counts per time bucket
+	// This aggregates tags by time bucket and counts documents
+	query := `
+		WITH time_buckets AS (
+			SELECT
+				generate_series($1::timestamp, $2::timestamp, $3::interval) AS bucket_start
+		),
+		document_buckets AS (
+			SELECT
+				tb.bucket_start,
+				r.id AS request_id,
+				r.effective_date
+			FROM time_buckets tb
+			CROSS JOIN requests r
+			WHERE r.effective_date >= tb.bucket_start
+			  AND r.effective_date < tb.bucket_start + $3::interval
+			  AND r.effective_date >= $1
+			  AND r.effective_date <= $2
+			  AND r.seo_enabled = true
+			  AND (r.metadata_json->>'tombstone_datetime' IS NULL
+			       OR (r.metadata_json->>'tombstone_datetime')::timestamp > NOW())
+		),
+		tag_counts AS (
+			SELECT
+				db.bucket_start,
+				t.tag,
+				COUNT(DISTINCT db.request_id) AS doc_count
+			FROM document_buckets db
+			INNER JOIN tags t ON t.request_id = db.request_id
+			GROUP BY db.bucket_start, t.tag
+		),
+		ranked_tags AS (
+			SELECT
+				bucket_start,
+				tag,
+				doc_count,
+				MAX(doc_count) OVER (PARTITION BY bucket_start) AS max_count_in_bucket,
+				ROW_NUMBER() OVER (PARTITION BY bucket_start ORDER BY doc_count DESC, tag ASC) AS rank
+			FROM tag_counts
+		)
+		SELECT
+			bucket_start,
+			tag,
+			doc_count,
+			CASE
+				WHEN max_count_in_bucket > 0 THEN doc_count::float / max_count_in_bucket::float
+				ELSE 0
+			END AS popularity_score
+		FROM ranked_tags
+		WHERE rank <= $4
+		ORDER BY bucket_start ASC, doc_count DESC
+	`
+
+	// Convert bucket duration to PostgreSQL interval string
+	bucketInterval := fmt.Sprintf("%d seconds", int(bucketDuration.Seconds()))
+
+	rows, err := s.db.Query(query, startDate, endDate, bucketInterval, maxTagsPerBucket)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query tag timeline: %w", err)
+	}
+	defer rows.Close()
+
+	// Build buckets map
+	bucketsMap := make(map[time.Time][]TagEntry)
+	allTags := make(map[string]bool)
+
+	for rows.Next() {
+		var bucketStart time.Time
+		var tag string
+		var count int
+		var popularity float64
+
+		if err := rows.Scan(&bucketStart, &tag, &count, &popularity); err != nil {
+			return nil, fmt.Errorf("failed to scan tag timeline row: %w", err)
+		}
+
+		// Calculate size factor: 0.5-2.0 based on popularity
+		// popularity 0-0.3 -> size 0.5-0.8
+		// popularity 0.3-0.7 -> size 0.8-1.2
+		// popularity 0.7-1.0 -> size 1.2-2.0
+		sizeFactor := 0.5 + (popularity * 1.5)
+
+		entry := TagEntry{
+			Tag:            tag,
+			Count:          count,
+			PopularityScore: popularity,
+			SizeFactor:     sizeFactor,
+		}
+
+		bucketsMap[bucketStart] = append(bucketsMap[bucketStart], entry)
+		allTags[tag] = true
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating tag timeline rows: %w", err)
+	}
+
+	// Convert map to sorted slice
+	var buckets []TagBucket
+	currentTime := startDate
+	for i := 0; i < numBuckets; i++ {
+		bucket := TagBucket{
+			Timestamp:   currentTime,
+			DurationSec: int(bucketDuration.Seconds()),
+			Tags:        bucketsMap[currentTime],
+		}
+		if bucket.Tags == nil {
+			bucket.Tags = []TagEntry{} // Empty array instead of null
+		}
+		buckets = append(buckets, bucket)
+		currentTime = currentTime.Add(bucketDuration)
+	}
+
+	// Get total document count in range
+	var totalDocs int
+	countQuery := `
+		SELECT COUNT(*)
+		FROM requests
+		WHERE effective_date >= $1
+		  AND effective_date <= $2
+		  AND seo_enabled = true
+		  AND (metadata_json->>'tombstone_datetime' IS NULL
+		       OR (metadata_json->>'tombstone_datetime')::timestamp > NOW())
+	`
+	if err := s.db.QueryRow(countQuery, startDate, endDate).Scan(&totalDocs); err != nil {
+		return nil, fmt.Errorf("failed to count documents: %w", err)
+	}
+
+	response := &TagTimelineResponse{
+		Buckets: buckets,
+		Stats: TagTimelineStats{
+			TotalDocuments:  totalDocs,
+			TotalUniqueTags: len(allTags),
+			BucketCount:     len(buckets),
+		},
+	}
+
+	return response, nil
+}

@@ -1859,6 +1859,118 @@ func (h *Handler) Health(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, response, http.StatusOK)
 }
 
+// GetTagTimeline returns tag frequency distribution over time buckets
+// This provides a scalable way to visualize tag trends without sending all documents
+// GET /api/tags/timeline?start_date=<RFC3339>&end_date=<RFC3339>&bucket_size=<duration>&max_tags=<int>
+func (h *Handler) GetTagTimeline(w http.ResponseWriter, r *http.Request) {
+	_, span := tracing.StartSpan(r.Context(), "GetTagTimeline")
+	defer span.End()
+
+	if r.Method != http.MethodGet {
+		respondError(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse query parameters
+	query := r.URL.Query()
+
+	// Parse start date (required)
+	startDateStr := query.Get("start_date")
+	if startDateStr == "" {
+		respondError(w, "start_date parameter is required", http.StatusBadRequest)
+		return
+	}
+	startDate, err := time.Parse(time.RFC3339, startDateStr)
+	if err != nil {
+		respondError(w, "invalid start_date format, use RFC3339", http.StatusBadRequest)
+		return
+	}
+
+	// Parse end date (required)
+	endDateStr := query.Get("end_date")
+	if endDateStr == "" {
+		respondError(w, "end_date parameter is required", http.StatusBadRequest)
+		return
+	}
+	endDate, err := time.Parse(time.RFC3339, endDateStr)
+	if err != nil {
+		respondError(w, "invalid end_date format, use RFC3339", http.StatusBadRequest)
+		return
+	}
+
+	// Validate date range
+	if endDate.Before(startDate) {
+		respondError(w, "end_date must be after start_date", http.StatusBadRequest)
+		return
+	}
+
+	// Parse bucket size (optional, default auto-calculated)
+	bucketSizeStr := query.Get("bucket_size")
+	var bucketSize time.Duration
+	if bucketSizeStr == "" {
+		// Auto-calculate bucket size based on total range
+		// For < 1 day: 1 hour buckets
+		// For 1-7 days: 3 hour buckets
+		// For 7-30 days: 6 hour buckets
+		// For 30-90 days: 1 day buckets
+		// For > 90 days: 2 day buckets
+		totalRange := endDate.Sub(startDate)
+		switch {
+		case totalRange < 24*time.Hour:
+			bucketSize = 1 * time.Hour
+		case totalRange < 7*24*time.Hour:
+			bucketSize = 3 * time.Hour
+		case totalRange < 30*24*time.Hour:
+			bucketSize = 6 * time.Hour
+		case totalRange < 90*24*time.Hour:
+			bucketSize = 24 * time.Hour
+		default:
+			bucketSize = 48 * time.Hour
+		}
+	} else {
+		// Parse as Go duration string (e.g., "1h", "30m", "24h")
+		bucketSize, err = time.ParseDuration(bucketSizeStr)
+		if err != nil {
+			respondError(w, "invalid bucket_size format, use Go duration (e.g., 1h, 30m)", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Parse max tags per bucket (optional, default 20)
+	maxTagsStr := query.Get("max_tags")
+	maxTags := 20
+	if maxTagsStr != "" {
+		maxTags, err = strconv.Atoi(maxTagsStr)
+		if err != nil || maxTags < 1 || maxTags > 100 {
+			respondError(w, "max_tags must be between 1 and 100", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Query storage
+	timeline, err := h.storage.GetTagTimeline(startDate, endDate, bucketSize, maxTags)
+	if err != nil {
+		slog.Default().Error("failed to get tag timeline",
+			"error", err,
+			"start_date", startDate,
+			"end_date", endDate,
+			"bucket_size", bucketSize,
+			"max_tags", maxTags,
+		)
+		respondError(w, "Failed to get tag timeline", http.StatusInternalServerError)
+		return
+	}
+
+	// Add tracing attributes
+	span.SetAttributes(
+		attribute.Int("tag_timeline.bucket_count", len(timeline.Buckets)),
+		attribute.Int("tag_timeline.total_documents", timeline.Stats.TotalDocuments),
+		attribute.Int("tag_timeline.total_unique_tags", timeline.Stats.TotalUniqueTags),
+	)
+
+	respondJSON(w, timeline, http.StatusOK)
+}
+
 func respondJSON(w http.ResponseWriter, data interface{}, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
