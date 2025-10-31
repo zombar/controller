@@ -1338,10 +1338,11 @@ func TestTombstoneRequest(t *testing.T) {
 	textAnalyzer := clients.NewTextAnalyzerClient(textanalyzerServer.URL)
 
 	handler := &Handler{
-		storage:            store,
-		scraper:            scraper,
-		textAnalyzer:       textAnalyzer,
-		linkScoreThreshold: 0.5,
+		storage:               store,
+		scraper:               scraper,
+		textAnalyzer:          textAnalyzer,
+		linkScoreThreshold:    0.5,
+		tombstonePeriodManual: 90,
 	}
 
 	// First, create a request to tombstone
@@ -1517,10 +1518,11 @@ func TestDeleteRequest(t *testing.T) {
 	textAnalyzer := clients.NewTextAnalyzerClient(textanalyzerServer.URL)
 
 	handler := &Handler{
-		storage:            store,
-		scraper:            scraper,
-		textAnalyzer:       textAnalyzer,
-		linkScoreThreshold: 0.5,
+		storage:               store,
+		scraper:               scraper,
+		textAnalyzer:          textAnalyzer,
+		linkScoreThreshold:    0.5,
+		tombstonePeriodManual: 90,
 	}
 
 	// Create a request to delete
@@ -1530,6 +1532,7 @@ func TestDeleteRequest(t *testing.T) {
 		SourceType:       "text",
 		TextAnalyzerUUID: "analyzer-1",
 		Tags:             []string{"test"},
+		Metadata:         map[string]interface{}{},
 	}
 	if err := store.SaveRequest(req); err != nil {
 		t.Fatalf("Failed to save request: %v", err)

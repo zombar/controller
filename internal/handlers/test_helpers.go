@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"crypto/md5"
 	"database/sql"
 	"fmt"
 	"os"
@@ -23,7 +24,16 @@ func setupTestDB(t *testing.T, testName string) (connStr string, cleanup func())
 	password := getEnvOrDefault("TEST_DB_PASSWORD", "postgres")
 
 	// Create a unique database name for this test
-	dbName := fmt.Sprintf("test_%s_%d", testName, time.Now().UnixNano())
+	// PostgreSQL has a 63 character limit for identifiers, so hash long names
+	timestamp := time.Now().UnixNano()
+	var dbName string
+	if len(testName) > 40 {
+		// Hash long test names to stay under the 63 character limit
+		hash := md5.Sum([]byte(testName))
+		dbName = fmt.Sprintf("test_%x_%d", hash[:8], timestamp)
+	} else {
+		dbName = fmt.Sprintf("test_%s_%d", testName, timestamp)
+	}
 
 	// Connect to 'docutab' database to create test database
 	adminConnStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=docutab sslmode=disable connect_timeout=5",
