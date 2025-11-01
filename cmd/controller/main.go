@@ -11,15 +11,15 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/zombar/controller/internal/clients"
-	"github.com/zombar/controller/internal/config"
-	"github.com/zombar/controller/internal/handlers"
-	"github.com/zombar/controller/internal/queue"
-	"github.com/zombar/controller/internal/storage"
-	"github.com/zombar/controller/internal/urlcache"
-	"github.com/zombar/controller/pkg/logging"
-	"github.com/zombar/purpletab/pkg/metrics"
-	"github.com/zombar/purpletab/pkg/tracing"
+	"github.com/docutag/controller/internal/clients"
+	"github.com/docutag/controller/internal/config"
+	"github.com/docutag/controller/internal/handlers"
+	"github.com/docutag/controller/internal/queue"
+	"github.com/docutag/controller/internal/storage"
+	"github.com/docutag/controller/internal/urlcache"
+	"github.com/docutag/controller/pkg/logging"
+	"github.com/docutag/platform/pkg/metrics"
+	"github.com/docutag/platform/pkg/tracing"
 )
 
 // corsMiddleware adds CORS headers to allow web UI access

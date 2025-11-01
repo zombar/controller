@@ -13,8 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/zombar/controller/internal/clients"
-	"github.com/zombar/controller/internal/storage"
+	"github.com/docutag/controller/internal/clients"
+	"github.com/docutag/controller/internal/storage"
 )
 
 // mockQueueClient is a test implementation of queue.Client

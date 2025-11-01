@@ -14,9 +14,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
-	"github.com/zombar/controller/internal/clients"
-	internalslug "github.com/zombar/controller/internal/slug"
-	"github.com/zombar/controller/internal/storage"
+	"github.com/docutag/controller/internal/clients"
+	internalslug "github.com/docutag/controller/internal/slug"
+	"github.com/docutag/controller/internal/storage"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
