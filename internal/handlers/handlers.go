@@ -12,14 +12,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/zombar/controller/internal/clients"
-	"github.com/zombar/controller/internal/events"
-	"github.com/zombar/controller/internal/queue"
-	"github.com/zombar/controller/internal/scraper_requests"
-	internalslug "github.com/zombar/controller/internal/slug"
-	"github.com/zombar/controller/internal/storage"
-	"github.com/zombar/purpletab/pkg/metrics"
-	"github.com/zombar/purpletab/pkg/tracing"
+	"github.com/docutag/controller/internal/clients"
+	"github.com/docutag/controller/internal/events"
+	"github.com/docutag/controller/internal/queue"
+	"github.com/docutag/controller/internal/scraper_requests"
+	internalslug "github.com/docutag/controller/internal/slug"
+	"github.com/docutag/controller/internal/storage"
+	"github.com/docutag/platform/pkg/metrics"
+	"github.com/docutag/platform/pkg/tracing"
 	"go.opentelemetry.io/otel/attribute"
 )
 

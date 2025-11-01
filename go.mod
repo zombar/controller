@@ -1,4 +1,4 @@
-module github.com/zombar/controller
+module github.com/docutag/controller
 
 go 1.24.0
 
@@ -6,13 +6,13 @@ toolchain go1.24.9
 
 require (
 	github.com/alicebob/miniredis/v2 v2.35.0
+	github.com/docutag/platform/pkg/metrics v0.0.0-20251025182248-ffe3c0c56936
+	github.com/docutag/platform/pkg/tracing v0.0.0-00010101000000-000000000000
 	github.com/google/uuid v1.6.0
 	github.com/hibiken/asynq v0.25.1
 	github.com/lib/pq v1.10.9
 	github.com/prometheus/client_golang v1.23.2
 	github.com/redis/go-redis/v9 v9.7.0
-	github.com/zombar/purpletab/pkg/metrics v0.0.0-20251025182248-ffe3c0c56936
-	github.com/zombar/purpletab/pkg/tracing v0.0.0-00010101000000-000000000000
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.46.1
 	go.opentelemetry.io/otel v1.38.0
 	go.opentelemetry.io/otel/sdk v1.38.0
@@ -52,6 +52,6 @@ require (
 	google.golang.org/protobuf v1.36.8 // indirect
 )
 
-replace github.com/zombar/purpletab/pkg/tracing => ../../pkg/tracing
+replace github.com/docutag/platform/pkg/tracing => ../../pkg/tracing
 
-replace github.com/zombar/purpletab/pkg/metrics => ../../pkg/metrics
+replace github.com/docutag/platform/pkg/metrics => ../../pkg/metrics

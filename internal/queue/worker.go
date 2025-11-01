@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/hibiken/asynq"
-	"github.com/zombar/controller/internal/clients"
-	"github.com/zombar/controller/internal/storage"
-	"github.com/zombar/purpletab/pkg/metrics"
+	"github.com/docutag/controller/internal/clients"
+	"github.com/docutag/controller/internal/storage"
+	"github.com/docutag/platform/pkg/metrics"
 )
 
 // URLCache defines the interface for URL caching

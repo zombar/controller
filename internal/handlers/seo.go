@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/zombar/controller/internal/seo"
-	"github.com/zombar/controller/internal/templates"
+	"github.com/docutag/controller/internal/seo"
+	"github.com/docutag/controller/internal/templates"
 )
 
 // ServeContent serves SEO-optimized HTML content page

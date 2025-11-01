@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zombar/controller/internal/storage"
+	"github.com/docutag/controller/internal/storage"
 )
 
 // TestMergeAITagsWithComputedTags tests the AI tag merging logic

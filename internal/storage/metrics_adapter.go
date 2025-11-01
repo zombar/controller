@@ -1,6 +1,6 @@
 package storage
 
-import "github.com/zombar/purpletab/pkg/metrics"
+import "github.com/docutag/platform/pkg/metrics"
 
 // MetricsAdapter adapts businessMetrics to the storage.BusinessMetrics interface
 type MetricsAdapter struct {
