@@ -189,7 +189,7 @@ func (s *Storage) SaveRequest(req *Request) error {
 
 	// Insert request record with effective_date, slug, and seo_enabled
 	_, err = tx.Exec(`
-		INSERT INTO requests (id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled)
+		INSERT INTO controller_requests (id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 	`, req.ID, req.CreatedAt, req.EffectiveDate, req.SourceType, req.SourceURL, req.ScraperUUID, req.TextAnalyzerUUID, string(tagsJSON), string(metadataJSON), req.Slug, req.SEOEnabled)
 	if err != nil {
@@ -198,7 +198,7 @@ func (s *Storage) SaveRequest(req *Request) error {
 
 	// Insert individual tags for searching
 	if len(req.Tags) > 0 {
-		stmt, err := tx.Prepare("INSERT INTO tags (request_id, tag) VALUES ($1, $2)")
+		stmt, err := tx.Prepare("INSERT INTO controller_tags (request_id, tag) VALUES ($1, $2)")
 		if err != nil {
 			return fmt.Errorf("failed to prepare tag insert: %w", err)
 		}
@@ -225,7 +225,7 @@ func (s *Storage) GetRequest(id string) (*Request, error) {
 
 	err := s.db.QueryRow(`
 		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
-		FROM requests
+		FROM controller_requests
 		WHERE id = $1
 	`, id).Scan(&req.ID, &req.CreatedAt, &effectiveDateStr, &req.SourceType, &req.SourceURL, &req.ScraperUUID, &req.TextAnalyzerUUID, &tagsJSON, &metadataJSON, &slug, &req.SEOEnabled)
 
@@ -275,13 +275,13 @@ func (s *Storage) DeleteRequest(id string) error {
 	defer tx.Rollback()
 
 	// Delete associated tags first (due to foreign key constraint)
-	_, err = tx.Exec("DELETE FROM tags WHERE request_id = $1", id)
+	_, err = tx.Exec("DELETE FROM controller_tags WHERE request_id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete tags: %w", err)
 	}
 
 	// Delete the request
-	result, err := tx.Exec("DELETE FROM requests WHERE id = $1", id)
+	result, err := tx.Exec("DELETE FROM controller_requests WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("failed to delete request: %w", err)
 	}
@@ -310,7 +310,7 @@ func (s *Storage) UpdateRequestMetadata(id string, metadata map[string]interface
 	}
 
 	result, err := s.db.Exec(`
-		UPDATE requests
+		UPDATE controller_requests
 		SET metadata_json = $1
 		WHERE id = $2
 	`, string(metadataJSON), id)
@@ -351,7 +351,7 @@ func (s *Storage) SearchByTags(searchTags []string, fuzzy bool) ([]string, error
 
 	query := fmt.Sprintf(`
 		SELECT DISTINCT request_id
-		FROM tags
+		FROM controller_tags
 		WHERE %s
 		ORDER BY request_id
 	`, strings.Join(conditions, " OR "))
@@ -433,8 +433,8 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 		// Use INNER JOIN to filter by tags
 		query = `
 			SELECT DISTINCT r.id, r.created_at, r.effective_date, r.source_type, r.source_url, r.scraper_uuid, r.textanalyzer_uuid, r.tags_json, r.metadata_json, r.slug, r.seo_enabled
-			FROM requests r
-			INNER JOIN tags t ON r.id = t.request_id
+			FROM controller_requests r
+			INNER JOIN controller_tags t ON r.id = t.request_id
 			WHERE (` + strings.Join(tagConditions, " OR ") + `)`
 
 		// Add other WHERE clauses
@@ -445,7 +445,7 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 		// No tags specified, query requests table directly
 		query = `
 			SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
-			FROM requests r`
+			FROM controller_requests r`
 
 		if len(whereClauses) > 0 {
 			query += " WHERE " + strings.Join(whereClauses, " AND ")
@@ -521,7 +521,7 @@ func (s *Storage) FilterRequests(opts FilterOptions) ([]*Request, error) {
 func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 	query := `
 		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
-		FROM requests
+		FROM controller_requests
 		WHERE seo_enabled = true
 		  AND (
 		    metadata_json->>'tombstone_datetime' IS NULL
@@ -585,7 +585,7 @@ func (s *Storage) ListRequests(limit, offset int) ([]*Request, error) {
 // Returns nil if no requests exist in the database.
 func (s *Storage) GetTimelineExtents() (*time.Time, error) {
 	// Simple query using the pre-normalized effective_date column
-	query := `SELECT MIN(effective_date) FROM requests`
+	query := `SELECT MIN(effective_date) FROM controller_requests`
 
 	var earliestDateStr sql.NullString
 	err := s.db.QueryRow(query).Scan(&earliestDateStr)
@@ -613,7 +613,7 @@ func (s *Storage) GenerateMockData() error {
 
 	// Check if we already have data
 	var count int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM requests").Scan(&count)
+	err := s.db.QueryRow("SELECT COUNT(*) FROM controller_requests").Scan(&count)
 	if err != nil {
 		return fmt.Errorf("failed to count existing requests: %w", err)
 	}
@@ -786,7 +786,7 @@ func (s *Storage) GenerateMockData() error {
 // UpdateSEOEnabled updates the SEO enabled status of a request
 func (s *Storage) UpdateSEOEnabled(id string, enabled bool) error {
 	result, err := s.db.Exec(`
-		UPDATE requests
+		UPDATE controller_requests
 		SET seo_enabled = $1
 		WHERE id = $2
 	`, enabled, id)
@@ -810,7 +810,7 @@ func (s *Storage) UpdateSEOEnabled(id string, enabled bool) error {
 func (s *Storage) GetRequestBySlug(slug string) (*Request, error) {
 	query := `
 		SELECT id, created_at, effective_date, source_type, source_url, scraper_uuid, textanalyzer_uuid, tags_json, metadata_json, slug, seo_enabled
-		FROM requests
+		FROM controller_requests
 		WHERE slug = $1
 		LIMIT 1
 	`
@@ -864,7 +864,7 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 	defer tx.Rollback()
 
 	// Update tags in database
-	result, err := tx.Exec("UPDATE requests SET tags_json = $1 WHERE id = $2", string(tagsJSON), id)
+	result, err := tx.Exec("UPDATE controller_requests SET tags_json = $1 WHERE id = $2", string(tagsJSON), id)
 	if err != nil {
 		return fmt.Errorf("failed to update tags: %w", err)
 	}
@@ -879,13 +879,13 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 	}
 
 	// Delete existing tag associations
-	if _, err := tx.Exec("DELETE FROM tags WHERE request_id = $1", id); err != nil {
+	if _, err := tx.Exec("DELETE FROM controller_tags WHERE request_id = $1", id); err != nil {
 		return fmt.Errorf("failed to delete old tag associations: %w", err)
 	}
 
 	// Insert new tag associations
 	for _, tag := range tags {
-		if _, err := tx.Exec("INSERT INTO tags (request_id, tag) VALUES ($1, $2)", id, tag); err != nil {
+		if _, err := tx.Exec("INSERT INTO controller_tags (request_id, tag) VALUES ($1, $2)", id, tag); err != nil {
 			return fmt.Errorf("failed to insert tag association: %w", err)
 		}
 	}
@@ -909,7 +909,7 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 	if hasTombstoneTag {
 		// Fetch current metadata
 		var metadataJSON string
-		err := tx.QueryRow("SELECT metadata_json FROM requests WHERE id = $1", id).Scan(&metadataJSON)
+		err := tx.QueryRow("SELECT metadata_json FROM controller_requests WHERE id = $1", id).Scan(&metadataJSON)
 		if err != nil {
 			return fmt.Errorf("failed to fetch metadata: %w", err)
 		}
@@ -937,7 +937,7 @@ func (s *Storage) UpdateRequestTags(id string, tags []string) error {
 		}
 
 		// Update metadata in database
-		_, err = tx.Exec("UPDATE requests SET metadata_json = $1 WHERE id = $2", string(updatedMetadataJSON), id)
+		_, err = tx.Exec("UPDATE controller_requests SET metadata_json = $1 WHERE id = $2", string(updatedMetadataJSON), id)
 		if err != nil {
 			return fmt.Errorf("failed to update metadata with tombstone: %w", err)
 		}
@@ -969,7 +969,7 @@ func (s *Storage) GetDocumentStats() (*DocumentStats, error) {
 	// Get total by source type
 	rows, err := s.db.Query(`
 		SELECT source_type, COUNT(*)
-		FROM requests
+		FROM controller_requests
 		WHERE (metadata_json->>'tombstone_datetime' IS NULL OR (metadata_json->>'tombstone_datetime')::timestamp > NOW())
 		GROUP BY source_type
 	`)
@@ -990,7 +990,7 @@ func (s *Storage) GetDocumentStats() (*DocumentStats, error) {
 	// Get documents with tags
 	err = s.db.QueryRow(`
 		SELECT COUNT(DISTINCT request_id)
-		FROM tags
+		FROM controller_tags
 	`).Scan(&stats.TotalWithTags)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count documents with tags: %w", err)
@@ -999,7 +999,7 @@ func (s *Storage) GetDocumentStats() (*DocumentStats, error) {
 	// Get unique tags count
 	err = s.db.QueryRow(`
 		SELECT COUNT(DISTINCT tag)
-		FROM tags
+		FROM controller_tags
 	`).Scan(&stats.UniqueTagsCount)
 	if err != nil {
 		return nil, fmt.Errorf("failed to count unique tags: %w", err)
@@ -1008,7 +1008,7 @@ func (s *Storage) GetDocumentStats() (*DocumentStats, error) {
 	// Get documents with SEO enabled
 	err = s.db.QueryRow(`
 		SELECT COUNT(*)
-		FROM requests
+		FROM controller_requests
 		WHERE seo_enabled = true
 		AND (metadata_json->>'tombstone_datetime' IS NULL OR (metadata_json->>'tombstone_datetime')::timestamp > NOW())
 	`).Scan(&stats.TotalWithSEO)
@@ -1019,7 +1019,7 @@ func (s *Storage) GetDocumentStats() (*DocumentStats, error) {
 	// Get tombstoned documents
 	err = s.db.QueryRow(`
 		SELECT COUNT(*)
-		FROM requests
+		FROM controller_requests
 		WHERE metadata_json->>'tombstone_datetime' IS NOT NULL
 		AND (metadata_json->>'tombstone_datetime')::timestamp <= NOW()
 	`).Scan(&stats.TotalTombstoned)
@@ -1089,7 +1089,7 @@ func (s *Storage) GetTagTimeline(startDate, endDate time.Time, bucketDuration ti
 				r.id AS request_id,
 				r.effective_date
 			FROM time_buckets tb
-			CROSS JOIN requests r
+			CROSS JOIN controller_requests r
 			WHERE r.effective_date >= tb.bucket_start
 			  AND r.effective_date < tb.bucket_start + $3::interval
 			  AND r.effective_date >= $1
@@ -1104,7 +1104,7 @@ func (s *Storage) GetTagTimeline(startDate, endDate time.Time, bucketDuration ti
 				t.tag,
 				COUNT(DISTINCT db.request_id) AS doc_count
 			FROM document_buckets db
-			INNER JOIN tags t ON t.request_id = db.request_id
+			INNER JOIN controller_tags t ON t.request_id = db.request_id
 			GROUP BY db.bucket_start, t.tag
 		),
 		ranked_tags AS (
@@ -1222,7 +1222,7 @@ func (s *Storage) GetTagTimeline(startDate, endDate time.Time, bucketDuration ti
 	var totalDocs int
 	countQuery := `
 		SELECT COUNT(*)
-		FROM requests
+		FROM controller_requests
 		WHERE effective_date >= $1
 		  AND effective_date <= $2
 		  AND seo_enabled = true

@@ -27,7 +27,7 @@ type ScrapeJob struct {
 // SaveScrapeJob inserts a new scrape job into the database
 func (s *Storage) SaveScrapeJob(job *ScrapeJob) error {
 	query := `
-		INSERT INTO scrape_jobs (
+		INSERT INTO controller_scrape_jobs (
 			id, url, extract_links, status, retries,
 			created_at, updated_at, completed_at,
 			error_message, result_request_id, asynq_task_id,
@@ -67,7 +67,7 @@ func (s *Storage) GetScrapeJob(id string) (*ScrapeJob, error) {
 			created_at, updated_at, completed_at,
 			error_message, result_request_id, asynq_task_id,
 			parent_job_id, depth
-		FROM scrape_jobs
+		FROM controller_scrape_jobs
 		WHERE id = $1
 	`
 
@@ -127,7 +127,7 @@ func (s *Storage) ListScrapeJobs(limit, offset int) ([]*ScrapeJob, error) {
 			created_at, updated_at, completed_at,
 			error_message, result_request_id, asynq_task_id,
 			parent_job_id, depth
-		FROM scrape_jobs
+		FROM controller_scrape_jobs
 		WHERE parent_job_id IS NULL
 		ORDER BY created_at DESC
 		LIMIT $1 OFFSET $2
@@ -173,7 +173,7 @@ func (s *Storage) GetChildJobs(parentID string) ([]*ScrapeJob, error) {
 			created_at, updated_at, completed_at,
 			error_message, result_request_id, asynq_task_id,
 			parent_job_id, depth
-		FROM scrape_jobs
+		FROM controller_scrape_jobs
 		WHERE parent_job_id = $1
 		ORDER BY created_at ASC
 	`
@@ -259,7 +259,7 @@ func (s *Storage) UpdateScrapeJobStatus(id, status string, errorMessage string) 
 	}
 
 	query := `
-		UPDATE scrape_jobs
+		UPDATE controller_scrape_jobs
 		SET status = $1, updated_at = $2, completed_at = $3, error_message = $4
 		WHERE id = $5
 	`
@@ -285,7 +285,7 @@ func (s *Storage) UpdateScrapeJobStatus(id, status string, errorMessage string) 
 func (s *Storage) UpdateScrapeJobResult(id string, resultRequestID string) error {
 	now := time.Now()
 	query := `
-		UPDATE scrape_jobs
+		UPDATE controller_scrape_jobs
 		SET status = $1, result_request_id = $2, updated_at = $3, completed_at = $4
 		WHERE id = $5
 	`
@@ -310,7 +310,7 @@ func (s *Storage) UpdateScrapeJobResult(id string, resultRequestID string) error
 // UpdateScrapeJobTaskID updates the Asynq task ID for a job
 func (s *Storage) UpdateScrapeJobTaskID(id string, taskID string) error {
 	query := `
-		UPDATE scrape_jobs
+		UPDATE controller_scrape_jobs
 		SET asynq_task_id = $1, updated_at = $2
 		WHERE id = $3
 	`
@@ -335,7 +335,7 @@ func (s *Storage) UpdateScrapeJobTaskID(id string, taskID string) error {
 // IncrementScrapeJobRetries increments the retry count for a job
 func (s *Storage) IncrementScrapeJobRetries(id string) error {
 	query := `
-		UPDATE scrape_jobs
+		UPDATE controller_scrape_jobs
 		SET retries = retries + 1, updated_at = $1
 		WHERE id = $2
 	`
@@ -359,7 +359,7 @@ func (s *Storage) IncrementScrapeJobRetries(id string) error {
 
 // DeleteScrapeJob deletes a scrape job
 func (s *Storage) DeleteScrapeJob(id string) error {
-	query := `DELETE FROM scrape_jobs WHERE id = $1`
+	query := `DELETE FROM controller_scrape_jobs WHERE id = $1`
 
 	result, err := s.db.Exec(query, id)
 	if err != nil {
@@ -380,7 +380,7 @@ func (s *Storage) DeleteScrapeJob(id string) error {
 
 // CountScrapeJobsByStatus counts jobs by status
 func (s *Storage) CountScrapeJobsByStatus(status string) (int, error) {
-	query := `SELECT COUNT(*) FROM scrape_jobs WHERE status = $1`
+	query := `SELECT COUNT(*) FROM controller_scrape_jobs WHERE status = $1`
 
 	var count int
 	err := s.db.QueryRow(query, status).Scan(&count)

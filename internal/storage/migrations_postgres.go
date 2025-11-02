@@ -26,7 +26,7 @@ var postgresMigrations = []Migration{
 				applied_at TIMESTAMPTZ DEFAULT NOW()
 			);
 
-			CREATE TABLE IF NOT EXISTS requests (
+			CREATE TABLE IF NOT EXISTS controller_requests (
 				id TEXT PRIMARY KEY,
 				created_at TIMESTAMPTZ DEFAULT NOW(),
 				source_type TEXT NOT NULL,
@@ -37,39 +37,39 @@ var postgresMigrations = []Migration{
 				metadata_json JSONB
 			);
 
-			CREATE INDEX IF NOT EXISTS idx_requests_created_at ON requests(created_at DESC);
-			CREATE INDEX IF NOT EXISTS idx_requests_scraper_uuid ON requests(scraper_uuid);
-			CREATE INDEX IF NOT EXISTS idx_requests_textanalyzer_uuid ON requests(textanalyzer_uuid);
+			CREATE INDEX IF NOT EXISTS idx_controller_requests_created_at ON controller_requests(created_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_controller_requests_scraper_uuid ON controller_requests(scraper_uuid);
+			CREATE INDEX IF NOT EXISTS idx_controller_requests_textanalyzer_uuid ON controller_requests(textanalyzer_uuid);
 		`,
 	},
 	{
 		Version: 2,
 		Name:    "add_tags_table",
 		SQL: `
-			CREATE TABLE IF NOT EXISTS tags (
+			CREATE TABLE IF NOT EXISTS controller_tags (
 				id SERIAL PRIMARY KEY,
 				request_id TEXT NOT NULL,
 				tag TEXT NOT NULL,
-				FOREIGN KEY (request_id) REFERENCES requests(id) ON DELETE CASCADE
+				FOREIGN KEY (request_id) REFERENCES controller_requests(id) ON DELETE CASCADE
 			);
 
-			CREATE INDEX IF NOT EXISTS idx_tags_tag ON tags(tag);
-			CREATE INDEX IF NOT EXISTS idx_tags_request_id ON tags(request_id);
+			CREATE INDEX IF NOT EXISTS idx_controller_tags_tag ON controller_tags(tag);
+			CREATE INDEX IF NOT EXISTS idx_controller_tags_request_id ON controller_tags(request_id);
 		`,
 	},
 	{
 		Version: 3,
 		Name:    "add_effective_date",
 		SQL: `
-			-- Add effective_date column to requests table
-			ALTER TABLE requests ADD COLUMN IF NOT EXISTS effective_date TIMESTAMPTZ;
+			-- Add effective_date column to controller_requests table
+			ALTER TABLE controller_requests ADD COLUMN IF NOT EXISTS effective_date TIMESTAMPTZ;
 
 			-- Create index on effective_date for efficient timeline queries
-			CREATE INDEX IF NOT EXISTS idx_requests_effective_date ON requests(effective_date DESC);
+			CREATE INDEX IF NOT EXISTS idx_controller_requests_effective_date ON controller_requests(effective_date DESC);
 
 			-- Populate effective_date for existing records using PostgreSQL JSONB operators
 			-- This uses the date precedence: publish_date -> published_date -> additional_metadata.date -> created_at
-			UPDATE requests
+			UPDATE controller_requests
 			SET effective_date = COALESCE(
 				(metadata_json->'scraper_metadata'->>'publish_date')::TIMESTAMPTZ,
 				(metadata_json->'scraper_metadata'->>'published_date')::TIMESTAMPTZ,
@@ -85,22 +85,22 @@ var postgresMigrations = []Migration{
 		Version: 4,
 		Name:    "add_slug_for_seo",
 		SQL: `
-			-- Add slug column to requests table for SEO-friendly URLs
-			ALTER TABLE requests ADD COLUMN IF NOT EXISTS slug TEXT;
+			-- Add slug column to controller_requests table for SEO-friendly URLs
+			ALTER TABLE controller_requests ADD COLUMN IF NOT EXISTS slug TEXT;
 
 			-- Create unique partial index on slug for fast lookups (only non-NULL slugs)
-			CREATE UNIQUE INDEX IF NOT EXISTS idx_requests_slug ON requests(slug) WHERE slug IS NOT NULL;
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_controller_requests_slug ON controller_requests(slug) WHERE slug IS NOT NULL;
 		`,
 	},
 	{
 		Version: 5,
 		Name:    "add_seo_enabled",
 		SQL: `
-			-- Add seo_enabled column to requests table to allow toggling SEO pages per document
-			ALTER TABLE requests ADD COLUMN IF NOT EXISTS seo_enabled BOOLEAN NOT NULL DEFAULT true;
+			-- Add seo_enabled column to controller_requests table to allow toggling SEO pages per document
+			ALTER TABLE controller_requests ADD COLUMN IF NOT EXISTS seo_enabled BOOLEAN NOT NULL DEFAULT true;
 
 			-- Create index on seo_enabled for filtering
-			CREATE INDEX IF NOT EXISTS idx_requests_seo_enabled ON requests(seo_enabled);
+			CREATE INDEX IF NOT EXISTS idx_controller_requests_seo_enabled ON controller_requests(seo_enabled);
 		`,
 	},
 	{
@@ -108,7 +108,7 @@ var postgresMigrations = []Migration{
 		Name:    "add_scrape_jobs_table",
 		SQL: `
 			-- Create table for tracking async scrape jobs (replacing in-memory manager)
-			CREATE TABLE IF NOT EXISTS scrape_jobs (
+			CREATE TABLE IF NOT EXISTS controller_scrape_jobs (
 				id TEXT PRIMARY KEY,
 				url TEXT NOT NULL,
 				extract_links BOOLEAN NOT NULL DEFAULT false,
@@ -120,14 +120,14 @@ var postgresMigrations = []Migration{
 				error_message TEXT,
 				result_request_id TEXT,
 				asynq_task_id TEXT,
-				FOREIGN KEY(result_request_id) REFERENCES requests(id) ON DELETE SET NULL
+				FOREIGN KEY(result_request_id) REFERENCES controller_requests(id) ON DELETE SET NULL
 			);
 
 			-- Indexes for efficient querying
-			CREATE INDEX IF NOT EXISTS idx_scrape_jobs_status ON scrape_jobs(status);
-			CREATE INDEX IF NOT EXISTS idx_scrape_jobs_created_at ON scrape_jobs(created_at DESC);
-			CREATE INDEX IF NOT EXISTS idx_scrape_jobs_url ON scrape_jobs(url);
-			CREATE INDEX IF NOT EXISTS idx_scrape_jobs_asynq_task_id ON scrape_jobs(asynq_task_id);
+			CREATE INDEX IF NOT EXISTS idx_controller_scrape_jobs_status ON controller_scrape_jobs(status);
+			CREATE INDEX IF NOT EXISTS idx_controller_scrape_jobs_created_at ON controller_scrape_jobs(created_at DESC);
+			CREATE INDEX IF NOT EXISTS idx_controller_scrape_jobs_url ON controller_scrape_jobs(url);
+			CREATE INDEX IF NOT EXISTS idx_controller_scrape_jobs_asynq_task_id ON controller_scrape_jobs(asynq_task_id);
 		`,
 	},
 	{
@@ -135,20 +135,20 @@ var postgresMigrations = []Migration{
 		Name:    "add_parent_job_and_depth",
 		SQL: `
 			-- Add parent_job_id and depth for hierarchical scrape jobs
-			ALTER TABLE scrape_jobs ADD COLUMN IF NOT EXISTS parent_job_id TEXT;
-			ALTER TABLE scrape_jobs ADD COLUMN IF NOT EXISTS depth INTEGER NOT NULL DEFAULT 0;
+			ALTER TABLE controller_scrape_jobs ADD COLUMN IF NOT EXISTS parent_job_id TEXT;
+			ALTER TABLE controller_scrape_jobs ADD COLUMN IF NOT EXISTS depth INTEGER NOT NULL DEFAULT 0;
 
 			-- Create index for parent lookup
-			CREATE INDEX IF NOT EXISTS idx_scrape_jobs_parent_job_id ON scrape_jobs(parent_job_id);
+			CREATE INDEX IF NOT EXISTS idx_controller_scrape_jobs_parent_job_id ON controller_scrape_jobs(parent_job_id);
 
 			-- Add foreign key constraint (separate statement in PostgreSQL)
 			DO $$
 			BEGIN
 				IF NOT EXISTS (
-					SELECT 1 FROM pg_constraint WHERE conname = 'fk_scrape_jobs_parent'
+					SELECT 1 FROM pg_constraint WHERE conname = 'fk_controller_scrape_jobs_parent'
 				) THEN
-					ALTER TABLE scrape_jobs ADD CONSTRAINT fk_scrape_jobs_parent
-						FOREIGN KEY (parent_job_id) REFERENCES scrape_jobs(id) ON DELETE CASCADE;
+					ALTER TABLE controller_scrape_jobs ADD CONSTRAINT fk_controller_scrape_jobs_parent
+						FOREIGN KEY (parent_job_id) REFERENCES controller_scrape_jobs(id) ON DELETE CASCADE;
 				END IF;
 			END $$;
 		`,
